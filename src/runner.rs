@@ -249,6 +249,114 @@ impl CargoTestRunner {
 
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+
+    pub fn compile_asm(&self) -> Result<String, String> {
+        // Compile the tests in release mode with ASM generation
+        let output = Command::new("cargo")
+            .env("RUSTFLAGS", "--emit=asm")
+            .arg("test")
+            .arg("--release")
+            .arg("--no-run")
+            // .arg(&self.test_name) // compiling all tests is safer to find the unit test
+            .output()
+            .map_err(|e| format!("Failed to run cargo test for ASM: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("ASM Compilation failed: {}", stderr));
+        }
+
+        // Find the .s file in target/release/deps
+        let mut target_s_file = None;
+        if let Ok(entries) = fs::read_dir("target/release/deps") {
+            let mut latest_time = std::time::SystemTime::UNIX_EPOCH;
+            for entry in entries.flatten() {
+                if let Some(ext) = entry.path().extension() {
+                    if ext == "s" {
+                        if let Ok(metadata) = entry.metadata() {
+                            if let Ok(modified) = metadata.modified() {
+                                if modified > latest_time {
+                                    latest_time = modified;
+                                    target_s_file = Some(entry.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let s_path = target_s_file.ok_or_else(|| "Could not find generated .s file".to_string())?;
+        fs::read_to_string(&s_path).map_err(|e| format!("Failed to read .s file: {}", e))
+    }
+
+    pub fn extract_asm_block(&self, asm_content: &str, symbol: &str) -> Option<String> {
+        let symbol_label = format!("{}:", symbol);
+        let mut lines = asm_content.lines();
+        let mut in_block = false;
+        let mut block = String::new();
+
+        while let Some(line) = lines.next() {
+            if in_block {
+                if (line.ends_with(':') && !line.trim_start().starts_with('.')) || line.starts_with(&format!("\t.size\t{}", symbol)) {
+                    break;
+                }
+                block.push_str(line);
+                block.push('\n');
+            } else if line == symbol_label {
+                in_block = true;
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+
+        if in_block {
+            Some(block)
+        } else {
+            None
+        }
+    }
+
+    pub fn extract_asm_block_by_keywords(&self, asm_content: &str, keywords: &[&str]) -> Option<String> {
+        let lines: Vec<&str> = asm_content.lines().collect();
+        let mut target_symbol = String::new();
+
+        for (i, &line) in lines.iter().enumerate() {
+            if line.ends_with(':') && !line.trim_start().starts_with('.') {
+                let mut all_match = true;
+                for &kw in keywords {
+                    if !line.contains(kw) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                
+                if all_match {
+                    // Verify it's a function by looking ahead 5 lines for .cfi_startproc or .loc
+                    let mut is_function = false;
+                    for j in 1..=5 {
+                        if let Some(&next_line) = lines.get(i + j) {
+                            if next_line.contains(".cfi_startproc") || next_line.contains(".loc") || next_line.contains("Lfunc_begin") {
+                                is_function = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if is_function {
+                        target_symbol = line[..line.len() - 1].to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if target_symbol.is_empty() {
+            return None;
+        }
+
+        self.extract_asm_block(asm_content, &target_symbol)
+    }
 }
 
 

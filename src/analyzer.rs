@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum Complexity {
     O1,
     OLogN,
@@ -215,5 +215,23 @@ mod tests {
         ];
         let r2 = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
         assert_eq!(r2, 0.0); // Explained variance is 0% because true variance is 0
+    }
+
+    #[test]
+    fn test_calculate_r_squared_complexity() {
+        // Read N from environment variable for CovOpt
+        let n: usize = std::env::var("COVOPT_N")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(100);
+
+        // Generate N data points
+        let mut data = Vec::with_capacity(n);
+        for i in 0..n {
+            data.push((i, i as u64));
+        }
+
+        // Run the function we want to measure
+        let _r2 = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
     }
 }

@@ -30,6 +30,8 @@ pub struct CoverageFunction {
 pub struct CoverageMap {
     // hit_counts[file_path][line_number] = execution_count
     hit_counts: HashMap<String, HashMap<u64, u64>>,
+    // symbol_map[file_path][line_number] = mangled_symbol_name
+    symbol_map: HashMap<String, HashMap<u64, String>>,
 }
 
 impl CoverageMap {
@@ -37,6 +39,7 @@ impl CoverageMap {
     pub fn from_json(json_str: &str) -> Result<Self, serde_json::Error> {
         let export: CoverageExport = serde_json::from_str(json_str)?;
         let mut hit_counts: HashMap<String, HashMap<u64, u64>> = HashMap::new();
+        let mut symbol_map: HashMap<String, HashMap<u64, String>> = HashMap::new();
 
         for data in export.data {
             for func in data.functions {
@@ -56,6 +59,10 @@ impl CoverageMap {
                         let file_map = hit_counts
                             .entry(filename.clone())
                             .or_default();
+                        
+                        let symbol_file_map = symbol_map
+                            .entry(filename.clone())
+                            .or_default();
 
                         for line in line_start..=line_end {
                             // Take the max hit count if multiple regions overlap
@@ -63,13 +70,15 @@ impl CoverageMap {
                             if count > *current_count {
                                 *current_count = count;
                             }
+                            // Always map the line to the encompassing function symbol
+                            symbol_file_map.insert(line, func.name.clone());
                         }
                     }
                 }
             }
         }
 
-        Ok(Self { hit_counts })
+        Ok(Self { hit_counts, symbol_map })
     }
 
     /// Get the hit count for a specific file and line number.
@@ -83,10 +92,23 @@ impl CoverageMap {
     /// This is useful because llvm-cov returns absolute paths.
     pub fn find_hit_count(&self, filename_suffix: &str, line_number: u64) -> Option<u64> {
         for (full_path, lines) in &self.hit_counts {
-            if full_path.ends_with(filename_suffix)
-                && let Some(&count) = lines.get(&line_number) {
+            if full_path.ends_with(filename_suffix) {
+                if let Some(&count) = lines.get(&line_number) {
                     return Some(count);
                 }
+            }
+        }
+        None
+    }
+
+    /// Retrieve the function symbol for a specific line by matching the end of the filename.
+    pub fn find_symbol(&self, filename_suffix: &str, line_number: u64) -> Option<String> {
+        for (full_path, symbols) in &self.symbol_map {
+            if full_path.ends_with(filename_suffix) {
+                if let Some(sym) = symbols.get(&line_number) {
+                    return Some(sym.clone());
+                }
+            }
         }
         None
     }
