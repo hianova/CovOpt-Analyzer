@@ -42,6 +42,7 @@ impl CoverageRunner {
     fn compile(&self) -> Result<(), String> {
         let out_bin = self.output_dir.join(&self.target_name);
         let status = Command::new(&self.rustc_cmd)
+            .env("LLVM_PROFILE_FILE", self.output_dir.join("default_%m_%p.profraw"))
             .arg("-C")
             .arg("instrument-coverage")
             .arg(&self.source_file)
@@ -146,6 +147,7 @@ impl CargoTestRunner {
     fn compile_tests(&self) -> Result<Vec<PathBuf>, String> {
         let output = Command::new("cargo")
             .env("RUSTFLAGS", "-C instrument-coverage")
+            .env("LLVM_PROFILE_FILE", self.output_dir.join("default_%m_%p.profraw"))
             .arg("test")
             .arg("--no-run")
             .arg("--message-format=json")
