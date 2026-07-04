@@ -31,6 +31,8 @@ struct Cli {
 enum Commands {
     /// Install a pre-commit hook in the current git repository
     InstallHook,
+    /// Initialize a default .covopt.toml in the current directory
+    Init,
     /// Audit all targets defined in .covopt.toml
     Audit,
     /// Run mutation testing on a target (Requires cargo-mutants)
@@ -110,6 +112,10 @@ struct RunArgs {
     /// Require static branch prediction hint detection
     #[arg(long)]
     require_branch_hints: bool,
+
+    /// Require strict aerospace grade static analysis
+    #[arg(long)]
+    require_aerospace_grade: bool,
 }
 
 fn parse_complexity(s: &str) -> Complexity {
@@ -225,6 +231,19 @@ fn run_analysis(args: &RunArgs) -> bool {
         }
     }
 
+    if args.require_aerospace_grade {
+        let violations = static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
+        if violations.is_empty() {
+            println!("Static Aerospace Grade: Passed");
+        } else {
+            eprintln!("\n[ERROR] Aerospace Grade Violations Detected in {}!", target_file);
+            for v in violations {
+                eprintln!("  - {}", v);
+            }
+            success = false;
+        }
+    }
+
     println!("---------------------------------------------------");
     if let Some(symbol) = target_symbol {
         if let Some((executed, total)) = target_coverage_rate {
@@ -327,6 +346,31 @@ fi
     println!("Successfully installed pre-commit hook to {}", hook_path.display());
 }
 
+fn init_config() {
+    let config_path = std::path::PathBuf::from(".covopt.toml");
+    if config_path.exists() {
+        eprintln!("CovOpt-Analyzer: .covopt.toml already exists in the current directory.");
+        std::process::exit(1);
+    }
+
+    let default_config = r#"[[target]]
+test = "my_benchmark_test"
+expected = "O(1)"
+n_values = "100,500,1000"
+target_file = "src/lib.rs"
+target_line = 10
+require_cache_padding = false
+require_branch_hints = false
+require_aerospace_grade = false
+"#;
+
+    if let Err(e) = std::fs::write(&config_path, default_config) {
+        eprintln!("Failed to write .covopt.toml: {}", e);
+        std::process::exit(1);
+    }
+    println!("Successfully initialized .covopt.toml. Please edit it to match your target.");
+}
+
 fn run_audit() {
     let config_path = ".covopt.toml";
     if !PathBuf::from(config_path).exists() {
@@ -353,6 +397,7 @@ fn run_audit() {
             mca_cpu: target.mca_cpu,
             require_cache_padding: target.require_cache_padding.unwrap_or(false),
             require_branch_hints: target.require_branch_hints.unwrap_or(false),
+            require_aerospace_grade: target.require_aerospace_grade.unwrap_or(false),
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
@@ -374,6 +419,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Init) => init_config(),
         Some(Commands::InstallHook) => install_hook(),
         Some(Commands::Audit) => run_audit(),
         Some(Commands::Mutate(args)) => {

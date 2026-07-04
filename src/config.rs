@@ -12,6 +12,7 @@ pub struct TargetConfig {
     pub mca_cpu: Option<String>,
     pub require_cache_padding: Option<bool>,
     pub require_branch_hints: Option<bool>,
+    pub require_aerospace_grade: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

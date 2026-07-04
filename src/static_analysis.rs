@@ -184,3 +184,47 @@ pub fn analyze_branch_hints(source_file: &Path) -> bool {
     content.contains("core::intrinsics::unlikely") ||
     content.contains("#[cold]")
 }
+
+pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let Ok(content) = fs::read_to_string(source_file) else {
+        violations.push(format!("Failed to read source file: {}", source_file.display()));
+        return violations;
+    };
+
+    if content.contains("extern crate alloc") {
+        violations.push("Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade.".to_string());
+    }
+    
+    // We do a simple check for standard library that avoids false positives like "no_std"
+    if content.contains("use std::") || content.contains("extern crate std") {
+        violations.push("Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string());
+    }
+
+    if content.contains("#[allow(unsafe_op_in_unsafe_fn)]") {
+        violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
+    }
+    
+    if content.contains("thread::spawn") || content.contains("tokio::spawn") {
+        violations.push("Dynamic thread spawning is prohibited.".to_string());
+    }
+    
+    if content.contains("Box::new") || content.contains("Vec::with_capacity") || content.contains("HashMap::new") {
+        violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string());
+    }
+
+    if content.contains("compare_exchange") && content.contains("spin_loop") && !content.contains(".load(") {
+        violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string());
+    }
+
+    if content.contains("struct ") && (content.contains("Guard") || content.contains("StateNode") || content.contains("ThreadState")) {
+        if !content.contains("impl Drop for") && !content.contains("impl<") && !content.contains("Drop for") {
+            // Simple heuristic for missing drop
+            if !content.contains("impl Drop") && !content.contains("impl<T> Drop") && !content.contains("impl<'a> Drop") {
+                 violations.push("Potential Resource Leak: Structs handling state or locks ('Guard', 'StateNode') must explicitly implement `Drop` to ensure deterministic thread resource cleanup.".to_string());
+            }
+        }
+    }
+
+    violations
+}
