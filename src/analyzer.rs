@@ -51,21 +51,20 @@ pub struct AnalysisReport {
     pub expected: Complexity,
     pub r_squared: f64,
     pub actual_trend: Complexity,
+    pub coefficient: f64,
 }
 
 pub struct ConvergenceAnalyzer;
 
 impl ConvergenceAnalyzer {
-    /// Calculate R-squared (Coefficient of Determination) for a given complexity model.
-    /// Data is an array of (N, Hit_Count) pairs.
-    pub fn calculate_r_squared(data: &[(usize, u64)], complexity: Complexity) -> f64 {
+    /// Calculate R-squared and the coefficient 'c' (slope) for a given complexity model.
+    /// Returns (r_squared, coefficient).
+    pub fn calculate_r_squared(data: &[(usize, u64)], complexity: Complexity) -> (f64, f64) {
         if data.is_empty() {
-            return 0.0;
+            return (0.0, 0.0);
         }
 
         let n = data.len() as f64;
-
-        // x represents theoretical f(N), y represents actual Hit_Count
         let mut x_values = Vec::with_capacity(data.len());
         let mut y_values = Vec::with_capacity(data.len());
 
@@ -80,7 +79,6 @@ impl ConvergenceAnalyzer {
         let mean_x = sum_x / n;
         let mean_y = sum_y / n;
 
-        // Calculate coefficients for simple linear regression: y = cx + b
         let mut sum_xy_diff = 0.0;
         let mut sum_xx_diff = 0.0;
 
@@ -92,7 +90,6 @@ impl ConvergenceAnalyzer {
         }
 
         let c = if sum_xx_diff.abs() < 1e-9 {
-            // If all x values are the same (e.g. O(1)), c is 0
             0.0
         } else {
             sum_xy_diff / sum_xx_diff
@@ -100,52 +97,46 @@ impl ConvergenceAnalyzer {
 
         let b = mean_y - c * mean_x;
 
-        // Calculate Total Sum of Squares (SST) and Residual Sum of Squares (SSR)
         let mut ss_tot = 0.0;
         let mut ss_res = 0.0;
 
         for i in 0..data.len() {
             let y = y_values[i];
             let predicted_y = c * x_values[i] + b;
-
             ss_tot += (y - mean_y).powi(2);
             ss_res += (y - predicted_y).powi(2);
         }
 
         if ss_tot.abs() < 1e-9 {
-            // Hit counts are perfectly flat (constant).
             if complexity == Complexity::O1 {
-                return 1.0; // Perfect O(1) match
+                return (1.0, c);
             } else {
-                // Better than expected scaling. For curve fitting, it means the variable
-                // didn't impact it, but technically R^2 is undefined/1.0 for flat lines.
-                // We'll return 0.0 because the variable X explains 0% of the variance (there is no variance).
-                return 0.0;
+                return (0.0, c);
             }
         }
 
-        1.0 - (ss_res / ss_tot)
+        let r2 = 1.0 - (ss_res / ss_tot);
+        (r2, c)
     }
 
-    /// Analyze convergence given data and expected complexity.
     pub fn analyze(data: &[(usize, u64)], expected: Complexity) -> AnalysisReport {
-        let expected_r2 = Self::calculate_r_squared(data, expected);
+        let (expected_r2, _) = Self::calculate_r_squared(data, expected);
 
-        // Find the best fitting complexity model
         let mut best_complexity = expected;
         let mut max_r2 = expected_r2;
+        let mut best_c = 0.0;
 
         for &comp in Complexity::all() {
-            let r2 = Self::calculate_r_squared(data, comp);
-            // We want the simplest complexity that fits well.
-            // But for now, we just pick the one with max R^2.
+            let (r2, c) = Self::calculate_r_squared(data, comp);
             if r2 > max_r2 {
                 max_r2 = r2;
                 best_complexity = comp;
+                best_c = c;
+            } else if max_r2 == expected_r2 && comp == expected {
+                best_c = c; // capture the c for the expected complexity if it's the best so far
             }
         }
 
-        // We consider it converged if R^2 is >= 0.95
         let is_converged = expected_r2 >= 0.95;
 
         AnalysisReport {
@@ -153,6 +144,7 @@ impl ConvergenceAnalyzer {
             expected,
             r_squared: expected_r2,
             actual_trend: best_complexity,
+            coefficient: best_c,
         }
     }
 }
@@ -203,14 +195,14 @@ mod tests {
     #[test]
     fn test_empty_data() {
         let data = vec![];
-        let r2 = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
+        let (r2, _) = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
         assert_eq!(r2, 0.0);
     }
 
     #[test]
     fn test_flat_non_o1() {
         let data = vec![(10, 42), (100, 42), (1000, 42)];
-        let r2 = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
+        let (r2, _) = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
         assert_eq!(r2, 0.0); // Explained variance is 0% because true variance is 0
     }
 

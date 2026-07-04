@@ -10,6 +10,8 @@ pub struct TargetConfig {
     pub target_file: String,
     pub target_line: u64,
     pub mca_cpu: Option<String>,
+    pub require_cache_padding: Option<bool>,
+    pub require_branch_hints: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

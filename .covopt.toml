@@ -1,0 +1,8 @@
+[[target]]
+test = "test_calculate_r_squared_complexity"
+expected = "ON"
+n_values = "100,500,1000"
+target_file = "src/analyzer.rs"
+target_line = 220
+require_cache_padding = false
+require_branch_hints = false

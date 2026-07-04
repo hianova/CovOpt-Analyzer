@@ -2,3 +2,6 @@
 *.profraw
 *.profdata
 *.s
+flamegraph.svg
+profile.json.gz
+

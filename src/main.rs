@@ -2,7 +2,10 @@ pub mod analyzer;
 pub mod config;
 pub mod coverage;
 pub mod mca;
+pub mod profiler;
 pub mod runner;
+pub mod static_analysis;
+pub mod harden;
 
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -30,8 +33,48 @@ enum Commands {
     InstallHook,
     /// Audit all targets defined in .covopt.toml
     Audit,
+    /// Run mutation testing on a target (Requires cargo-mutants)
+    Mutate(MutateArgs),
+    /// Run fuzzing on a target (Requires cargo-fuzz and nightly)
+    Fuzz(FuzzArgs),
+    /// Run tests with LLVM sanitizers (Requires nightly)
+    Sanitize(SanitizeArgs),
+    /// Profile a target to diagnose CPU hotspots and lock contention
+    Profile(ProfileArgs),
     /// Run a single analysis target (legacy mode)
     Run(RunArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct MutateArgs {
+    #[arg(short, long)]
+    test: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct FuzzArgs {
+    #[arg(short, long)]
+    target: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct SanitizeArgs {
+    #[arg(short, long)]
+    test: String,
+    
+    #[arg(long, default_value = "address")]
+    san_type: String, // address or thread
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct ProfileArgs {
+    /// The name of the test to profile
+    #[arg(short, long)]
+    test: String,
+
+    /// Profiling tool to use: flamegraph (default) or samply
+    #[arg(long, default_value = "flamegraph")]
+    tool: String,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -59,6 +102,14 @@ struct RunArgs {
     /// Optional LLVM-MCA CPU target (e.g. apple-m1, skylake)
     #[arg(long)]
     mca_cpu: Option<String>,
+
+    /// Require static cache padding detection
+    #[arg(long)]
+    require_cache_padding: bool,
+
+    /// Require static branch prediction hint detection
+    #[arg(long)]
+    require_branch_hints: bool,
 }
 
 fn parse_complexity(s: &str) -> Complexity {
@@ -133,12 +184,45 @@ fn run_analysis(args: &RunArgs) -> bool {
     println!("Analysis Results:");
     let report = ConvergenceAnalyzer::analyze(&data, expected);
     println!("{:#?}", report);
+    
+    let var_count = static_analysis::analyze_variables(std::path::Path::new(&target_file), target_line as usize);
+    println!("Static Variable Declarations: {}", var_count);
+    
+    let thread_activities = static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
+    if !thread_activities.is_empty() {
+        println!("Static Thread Activities:");
+        for act in thread_activities {
+            println!("  - {}", act);
+        }
+    } else {
+        println!("Static Thread Activities: None");
+    }
 
     let mut success = true;
 
     if report.is_converged && report.actual_trend > expected {
         eprintln!("\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}", expected, report.actual_trend);
         success = false;
+    }
+    
+    if args.require_cache_padding {
+        let has_padding = static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
+        if has_padding {
+            println!("Static Cache Padding: Detected");
+        } else {
+            eprintln!("\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target.");
+            success = false;
+        }
+    }
+
+    if args.require_branch_hints {
+        let has_hints = static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
+        if has_hints {
+            println!("Static Branch Hints: Detected");
+        } else {
+            eprintln!("\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target.");
+            success = false;
+        }
     }
 
     println!("---------------------------------------------------");
@@ -186,6 +270,12 @@ fn run_analysis(args: &RunArgs) -> bool {
                 }
 
                 if let Some(asm_block) = asm_block_opt {
+                    let mem_profile = static_analysis::analyze_memory_ops(&asm_block);
+                    println!("\n[Static Memory Operations]");
+                    println!("Loads:  {}", mem_profile.loads);
+                    println!("Stores: {}", mem_profile.stores);
+                    println!("Allocs: {}", mem_profile.allocs);
+
                     let mca_runner = McaRunner::new(args.mca_cpu.clone());
                     match mca_runner.run(&asm_block) {
                         Ok(mca_report) => {
@@ -261,6 +351,8 @@ fn run_audit() {
             target_file: Some(target.target_file.clone()),
             target_line: Some(target.target_line),
             mca_cpu: target.mca_cpu,
+            require_cache_padding: target.require_cache_padding.unwrap_or(false),
+            require_branch_hints: target.require_branch_hints.unwrap_or(false),
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
@@ -284,6 +376,26 @@ fn main() {
     match cli.command {
         Some(Commands::InstallHook) => install_hook(),
         Some(Commands::Audit) => run_audit(),
+        Some(Commands::Mutate(args)) => {
+            if !harden::run_mutants(&args.test) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Fuzz(args)) => {
+            if !harden::run_fuzz(&args.target) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Sanitize(args)) => {
+            if !harden::run_sanitizer(&args.test, &args.san_type) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Profile(args)) => {
+            if !profiler::run_profile(&args.test, &args.tool) {
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Run(args)) => {
             if !run_analysis(&args) {
                 std::process::exit(1);
