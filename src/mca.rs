@@ -1,5 +1,5 @@
-use std::process::{Command, Stdio};
 use std::io::Write;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Default)]
 pub struct McaReport {
@@ -20,22 +20,28 @@ impl McaRunner {
 
     pub fn run(&self, asm_block: &str) -> Result<McaReport, String> {
         let mut cmd = Command::new("llvm-mca");
-        
+
         if let Some(cpu) = &self.cpu {
             cmd.arg(format!("-mcpu={}", cpu));
         }
 
         cmd.stdin(Stdio::piped())
-           .stdout(Stdio::piped())
-           .stderr(Stdio::piped());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn llvm-mca: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn llvm-mca: {}", e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(asm_block.as_bytes()).map_err(|e| format!("Failed to write to stdin: {}", e))?;
+            stdin
+                .write_all(asm_block.as_bytes())
+                .map_err(|e| format!("Failed to write to stdin: {}", e))?;
         }
 
-        let output = child.wait_with_output().map_err(|e| format!("Failed to wait for llvm-mca: {}", e))?;
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("Failed to wait for llvm-mca: {}", e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -48,7 +54,7 @@ impl McaRunner {
 
     fn parse_report(&self, output: &str) -> Result<McaReport, String> {
         let mut report = McaReport::default();
-        
+
         for line in output.lines() {
             if line.starts_with("Instructions:") {
                 let parts: Vec<&str> = line.split_whitespace().collect();

@@ -1,30 +1,4 @@
-use serde::Deserialize;
 use std::collections::HashMap;
-
-#[derive(Debug, Deserialize)]
-pub struct CoverageExport {
-    pub version: String,
-    pub data: Vec<CoverageData>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CoverageData {
-    pub files: Vec<CoverageFile>,
-    pub functions: Vec<CoverageFunction>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CoverageFile {
-    pub filename: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CoverageFunction {
-    pub name: String,
-    pub filenames: Vec<String>,
-    // [line_start, col_start, line_end, col_end, count, file_id, exp_file_id, kind]
-    pub regions: Vec<Vec<u64>>, 
-}
 
 #[derive(Debug, Default)]
 pub struct CoverageMap {
@@ -35,50 +9,67 @@ pub struct CoverageMap {
 }
 
 impl CoverageMap {
-    /// Parse from llvm-cov JSON export format
-    pub fn from_json(json_str: &str) -> Result<Self, serde_json::Error> {
-        let export: CoverageExport = serde_json::from_str(json_str)?;
+    /// Parse from llvm-cov LCOV export format
+    pub fn from_lcov(lcov_str: &str) -> Result<Self, String> {
         let mut hit_counts: HashMap<String, HashMap<u64, u64>> = HashMap::new();
         let mut symbol_map: HashMap<String, HashMap<u64, String>> = HashMap::new();
 
-        for data in export.data {
-            for func in data.functions {
-                let filenames = &func.filenames;
+        let mut current_file = String::new();
+        let mut current_functions: Vec<(u64, String)> = Vec::new();
+        let mut current_file_hit_counts: HashMap<u64, u64> = HashMap::new();
 
-                for region in func.regions {
-                    if region.len() < 6 {
-                        continue; // Not a valid region format
-                    }
+        for line in lcov_str.lines() {
+            let line = line.trim();
+            if let Some(stripped) = line.strip_prefix("SF:") {
+                current_file = stripped.to_string();
+                current_functions.clear();
+                current_file_hit_counts.clear();
+            } else if let Some(stripped) = line.strip_prefix("FN:") {
+                // FN:<line>,<name>
+                let parts: Vec<&str> = stripped.splitn(2, ',').collect();
+                if parts.len() == 2
+                    && let Ok(line_num) = parts[0].parse::<u64>()
+                {
+                    current_functions.push((line_num, parts[1].to_string()));
+                }
+            } else if let Some(stripped) = line.strip_prefix("DA:") {
+                // DA:<line>,<hits>
+                let parts: Vec<&str> = stripped.splitn(2, ',').collect();
+                if parts.len() == 2
+                    && let (Ok(line_num), Ok(hits)) =
+                        (parts[0].parse::<u64>(), parts[1].parse::<u64>())
+                {
+                    current_file_hit_counts.insert(line_num, hits);
+                }
+            } else if line == "end_of_record" && !current_file.is_empty() {
+                // Sort functions by start line
+                current_functions.sort_by_key(|k| k.0);
 
-                    let line_start = region[0];
-                    let line_end = region[2];
-                    let count = region[4];
-                    let file_id = region[5] as usize;
+                let symbol_file_map = symbol_map.entry(current_file.clone()).or_default();
+                let hit_file_map = hit_counts.entry(current_file.clone()).or_default();
 
-                    if let Some(filename) = filenames.get(file_id) {
-                        let file_map = hit_counts
-                            .entry(filename.clone())
-                            .or_default();
-                        
-                        let symbol_file_map = symbol_map
-                            .entry(filename.clone())
-                            .or_default();
+                for (line_num, hits) in &current_file_hit_counts {
+                    hit_file_map.insert(*line_num, *hits);
 
-                        for line in line_start..=line_end {
-                            // Take the max hit count if multiple regions overlap
-                            let current_count = file_map.entry(line).or_insert(0);
-                            if count > *current_count {
-                                *current_count = count;
-                            }
-                            // Always map the line to the encompassing function symbol
-                            symbol_file_map.insert(line, func.name.clone());
+                    // Find the function this line belongs to (largest start line <= line_num)
+                    let mut func_name = None;
+                    for (start_line, name) in current_functions.iter().rev() {
+                        if *start_line <= *line_num {
+                            func_name = Some(name.clone());
+                            break;
                         }
+                    }
+                    if let Some(name) = func_name {
+                        symbol_file_map.insert(*line_num, name);
                     }
                 }
             }
         }
 
-        Ok(Self { hit_counts, symbol_map })
+        Ok(Self {
+            hit_counts,
+            symbol_map,
+        })
     }
 
     /// Get the hit count for a specific file and line number.
@@ -89,13 +80,12 @@ impl CoverageMap {
     }
 
     /// Retrieve the hit count for a specific line by matching the end of the filename.
-    /// This is useful because llvm-cov returns absolute paths.
     pub fn find_hit_count(&self, filename_suffix: &str, line_number: u64) -> Option<u64> {
         for (full_path, lines) in &self.hit_counts {
-            if full_path.ends_with(filename_suffix) {
-                if let Some(&count) = lines.get(&line_number) {
-                    return Some(count);
-                }
+            if full_path.ends_with(filename_suffix)
+                && let Some(&count) = lines.get(&line_number)
+            {
+                return Some(count);
             }
         }
         None
@@ -104,13 +94,43 @@ impl CoverageMap {
     /// Retrieve the function symbol for a specific line by matching the end of the filename.
     pub fn find_symbol(&self, filename_suffix: &str, line_number: u64) -> Option<String> {
         for (full_path, symbols) in &self.symbol_map {
-            if full_path.ends_with(filename_suffix) {
-                if let Some(sym) = symbols.get(&line_number) {
-                    return Some(sym.clone());
-                }
+            if full_path.ends_with(filename_suffix)
+                && let Some(sym) = symbols.get(&line_number)
+            {
+                return Some(sym.clone());
             }
         }
         None
+    }
+
+    /// Calculate the coverage rate for a specific function globally.
+    /// Returns (executed_lines, total_lines).
+    pub fn get_function_coverage(&self, function_name: &str) -> Option<(u64, u64)> {
+        let mut executed = 0;
+        let mut total = 0;
+        let mut found = false;
+
+        for (full_path, symbols) in &self.symbol_map {
+            if let Some(hit_file_map) = self.hit_counts.get(full_path) {
+                for (line_num, sym) in symbols {
+                    if sym == function_name || sym.contains(function_name) {
+                        found = true;
+                        if let Some(&hits) = hit_file_map.get(line_num) {
+                            total += 1;
+                            if hits > 0 {
+                                executed += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if found && total > 0 {
+            Some((executed, total))
+        } else {
+            None
+        }
     }
 }
 
@@ -119,129 +139,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_coverage_map_parsing() {
-        let json_data = r#"{
-            "type": "llvm.coverage.json.export",
-            "version": "3.1.0",
-            "data": [
-                {
-                    "files": [
-                        { "filename": "/src/dummy.rs" }
-                    ],
-                    "functions": [
-                        {
-                            "name": "loop_test",
-                            "filenames": ["/src/dummy.rs"],
-                            "regions": [
-                                [1, 1, 1, 23, 1, 0, 0, 0],
-                                [3, 9, 3, 10, 10, 0, 0, 0],
-                                [3, 19, 5, 6, 10, 0, 0, 0]
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }"#;
+    fn test_coverage_map_parsing_lcov() {
+        let lcov_data = "\
+TN:
+SF:/src/dummy.rs
+FN:1,_dummy_loop_test
+FNDA:10,_dummy_loop_test
+FNF:1
+FNH:1
+DA:1,1
+DA:2,0
+DA:3,10
+DA:4,10
+DA:5,10
+end_of_record
+";
 
-        let map = CoverageMap::from_json(json_data).expect("Failed to parse JSON");
+        let map = CoverageMap::from_lcov(lcov_data).expect("Failed to parse LCOV");
 
-        // The function executes 1 time
+        // The function starts at line 1
         assert_eq!(map.get_hit_count("/src/dummy.rs", 1), Some(1));
-        
-        // Uncovered line should return None since it's not in regions
-        assert_eq!(map.get_hit_count("/src/dummy.rs", 2), None);
-
-        // Loop body executes 10 times
+        assert_eq!(map.get_hit_count("/src/dummy.rs", 2), Some(0));
         assert_eq!(map.get_hit_count("/src/dummy.rs", 3), Some(10));
         assert_eq!(map.get_hit_count("/src/dummy.rs", 4), Some(10));
         assert_eq!(map.get_hit_count("/src/dummy.rs", 5), Some(10));
-        
+
         // Missing line should be None
         assert_eq!(map.get_hit_count("/src/dummy.rs", 6), None);
-    }
 
-    #[test]
-    fn test_invalid_json() {
-        let result = CoverageMap::from_json("{ invalid json }");
-        assert!(result.is_err());
-    }
+        // Test symbol mapping
+        assert_eq!(
+            map.find_symbol("dummy.rs", 3),
+            Some("_dummy_loop_test".to_string())
+        );
 
-    #[test]
-    fn test_invalid_region() {
-        let json_data = r#"{
-            "type": "llvm.coverage.json.export",
-            "version": "3.1.0",
-            "data": [
-                {
-                    "files": [ { "filename": "/src/dummy.rs" } ],
-                    "functions": [
-                        {
-                            "name": "loop_test",
-                            "filenames": ["/src/dummy.rs"],
-                            "regions": [
-                                [1, 1, 1, 23, 1]
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }"#;
-
-        let map = CoverageMap::from_json(json_data).expect("Failed to parse JSON");
-        assert_eq!(map.get_hit_count("/src/dummy.rs", 1), None); // Region too short, skipped
-    }
-
-    #[test]
-    fn test_invalid_file_id() {
-        let json_data = r#"{
-            "type": "llvm.coverage.json.export",
-            "version": "3.1.0",
-            "data": [
-                {
-                    "files": [ { "filename": "/src/dummy.rs" } ],
-                    "functions": [
-                        {
-                            "name": "loop_test",
-                            "filenames": ["/src/dummy.rs"],
-                            "regions": [
-                                [1, 1, 1, 23, 1, 999, 0, 0]
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }"#;
-        let map = CoverageMap::from_json(json_data).unwrap();
-        assert_eq!(map.get_hit_count("/src/dummy.rs", 1), None);
-    }
-
-    #[test]
-    fn test_json_complexity() {
-        let n: usize = std::env::var("COVOPT_N").unwrap_or_else(|_| "10".to_string()).parse().unwrap();
-        let mut regions = String::new();
-        for i in 0..n {
-            regions.push_str("[1, 1, 1, 23, 1, 0, 0, 0]");
-            if i < n - 1 {
-                regions.push(',');
-            }
-        }
-        let json_data = format!(r#"{{
-            "type": "llvm.coverage.json.export",
-            "version": "3.1.0",
-            "data": [
-                {{
-                    "files": [ {{ "filename": "/src/dummy.rs" }} ],
-                    "functions": [
-                        {{
-                            "name": "loop_test",
-                            "filenames": ["/src/dummy.rs"],
-                            "regions": [{}]
-                        }}
-                    ]
-                }}
-            ]
-        }}"#, regions);
-        
-        let _map = CoverageMap::from_json(&json_data).unwrap();
+        // Test coverage calculation
+        let (executed, total) = map.get_function_coverage("_dummy_loop_test").unwrap();
+        assert_eq!(total, 5); // lines 1, 2, 3, 4, 5
+        assert_eq!(executed, 4); // line 2 has 0 hits
     }
 }

@@ -54,12 +54,15 @@ In `my_crate`, create a simple test that reads `COVOPT_N`:
 ```rust
 // my_crate/src/lib.rs
 
+#[inline(never)] // Prevents inlining so LLVM-MCA can analyze the function
 pub fn process_data(n: usize) {
     let mut sum = 0;
     for i in 0..n {
-        // We want to track the hit count of this line! (e.g., line 6)
-        sum += i;
+        // We want to track the hit count of this line! (e.g., line 7)
+        // Use black_box to prevent Dead Code Elimination
+        sum += std::hint::black_box(i);
     }
+    std::hint::black_box(sum);
 }
 
 #[cfg(test)]
@@ -87,7 +90,8 @@ covopt \
   --expected ON \
   --n-values "1000,5000,10000" \
   --target-file src/lib.rs \
-  --target-line 6
+  --target-line 7 \
+  --mca-cpu apple-m1
 ```
 
 ### 3. Read the Report
@@ -124,6 +128,17 @@ Boom! Your code is mathematically proven to be $O(N)$ with a perfect $R^2 = 1.0$
 - `ON` or `O(N)` - Linear Time
 - `ONLogN` or `O(NLogN)` - Linearithmic Time
 - `ON2` or `O(N2)` - Quadratic Time
+- `O2N` or `O(2^N)` - Exponential Time
+- `OSqrtN` or `O(SQRT(N))` - Square-Root Time
+
+---
+
+## Tips: Preventing Compiler Optimization (Anti-DCE)
+Because CovOpt-Analyzer relies on LLVM source-based coverage, aggressive compiler optimizations (like Dead Code Elimination or Loop Unrolling) in `--release` mode might eliminate your targeted loop entirely, resulting in a **0 Hit Count** and failing the LLVM-MCA analysis.
+
+To ensure your algorithmic loop is preserved and accurately counted:
+1. **Use `std::hint::black_box`**: Wrap the inputs and the final output of your loop in `black_box`. This tells LLVM that the value is opaque and cannot be optimized away.
+2. **Use `#[inline(never)]`**: Add this macro to the function you are profiling. If the function gets inlined into the test runner, LLVM-MCA might fail to locate the target assembly block.
 
 ## [Simulating Time With Square-Root Space](https://arxiv.org/abs/2502.17779)
 
