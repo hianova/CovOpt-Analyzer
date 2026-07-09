@@ -3,6 +3,8 @@ name = "CovOpt-Analyzer"
 version = "0.1.0"
 edition = "2024"
 
+exclude = [".covopt/"]
+
 [[bin]]
 name = "covopt"
 path = "src/main.rs"

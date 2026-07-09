@@ -122,6 +122,37 @@ Boom! Your code is mathematically proven to be $O(N)$ with a perfect $R^2 = 1.0$
 
 ---
 
+## Configuration via `.covopt.toml`
+
+Instead of passing arguments via CLI, you can initialize a config file and run automated audits.
+
+```bash
+covopt init
+```
+
+This will generate a `.covopt.toml` file where you can define your targets:
+
+```toml
+agent_deterrence = true
+
+[[target]]
+test = "test_process_complexity"
+expected = "ON"
+n_values = "100,500,1000"
+target_file = "src/lib.rs"
+target_line = 7
+```
+
+Then simply run:
+
+```bash
+covopt audit
+```
+
+This will run the analysis for all the configured targets automatically.
+
+---
+
 ## Supported Expected Complexities (`--expected`)
 - `O1` or `O(1)` - Constant Time
 - `OLogN` or `O(LogN)` - Logarithmic Time

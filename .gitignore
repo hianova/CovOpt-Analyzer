@@ -5,3 +5,4 @@
 flamegraph.svg
 profile.json.gz
 
+.covopt/

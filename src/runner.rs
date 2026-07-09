@@ -142,7 +142,7 @@ impl CargoTestRunner {
         }
     }
 
-    pub fn run(&self, n: usize) -> Result<CoverageMap, String> {
+    pub fn run(&self, n: usize, seed: Option<u64>) -> Result<(CoverageMap, u64), String> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir)
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -153,13 +153,13 @@ impl CargoTestRunner {
             return Err("No test executables found".to_string());
         }
 
-        self.execute_tests(&executables, n)?;
+        let peak_rss = self.execute_tests(&executables, n, seed)?;
         self.merge_profdata(n)?;
         let lcov_str = self.export_lcov(&executables, n)?;
 
         let map = CoverageMap::from_lcov(&lcov_str)?;
         std::fs::write("/tmp/covopt_debug.json", &lcov_str).unwrap();
-        Ok(map)
+        Ok((map, peak_rss))
     }
 
     fn compile_tests(&self) -> Result<Vec<PathBuf>, String> {
@@ -201,7 +201,10 @@ impl CargoTestRunner {
         for line in stdout.lines() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
                 && v.get("reason").and_then(|r| r.as_str()) == Some("compiler-artifact")
-                && v.get("profile").and_then(|p| p.get("test")).and_then(|t| t.as_bool()) == Some(true)
+                && v.get("profile")
+                    .and_then(|p| p.get("test"))
+                    .and_then(|t| t.as_bool())
+                    == Some(true)
                 && let Some(exe) = v.get("executable").and_then(|e| e.as_str())
             {
                 executables.push(PathBuf::from(exe));
@@ -211,7 +214,12 @@ impl CargoTestRunner {
         Ok(executables)
     }
 
-    fn execute_tests(&self, executables: &[PathBuf], n: usize) -> Result<(), String> {
+    fn execute_tests(
+        &self,
+        executables: &[PathBuf],
+        n: usize,
+        seed: Option<u64>,
+    ) -> Result<u64, String> {
         // Clean up any existing profraw files for this N to prevent accumulating hit counts
         if let Ok(entries) = fs::read_dir(&self.output_dir) {
             for entry in entries.flatten() {
@@ -224,29 +232,53 @@ impl CargoTestRunner {
             }
         }
 
+        let mut max_rss = 0u64;
+
         for exe in executables {
             let profraw = self.output_dir.join(format!("covopt_{}_%p.profraw", n));
-            let output = Command::new(exe)
-                .arg(&self.test_name)
+
+            // On macOS, `/usr/bin/time -l` outputs peak RSS. On Linux, `/usr/bin/time -v` works if installed.
+            // For cross-platform simplicity in this specialized tool, we'll try `/usr/bin/time -l`.
+            let mut cmd = Command::new("/usr/bin/time");
+            cmd.arg("-l").arg(exe);
+            cmd.arg(&self.test_name)
                 .env("LLVM_PROFILE_FILE", &profraw)
-                .env("COVOPT_N", n.to_string())
+                .env("COVOPT_N", n.to_string());
+
+            if let Some(s) = seed {
+                cmd.env("COVOPT_FUZZ_SEED", s.to_string());
+            }
+
+            let output = cmd
                 .output()
                 .map_err(|e| format!("Failed to run test {}: {}", exe.display(), e))?;
 
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // Parse peak RSS
+            for line in stderr.lines() {
+                if line.contains("maximum resident set size")
+                    && let Some(num_str) = line.split_whitespace().next()
+                    && let Ok(rss) = num_str.parse::<u64>()
+                    && rss > max_rss
+                {
+                    max_rss = rss;
+                }
+            }
+
             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
                 if !stdout.contains("0 passed") {
                     eprintln!("Test {} failed: {}", exe.display(), stderr);
                 }
             } else {
-                let stdout = String::from_utf8_lossy(&output.stdout);
                 if stdout.contains("1 passed") {
                     println!("Test ran successfully.");
                 }
             }
         }
-        Ok(())
+
+        Ok(max_rss)
     }
 
     fn merge_profdata(&self, n: usize) -> Result<(), String> {
@@ -313,9 +345,9 @@ impl CargoTestRunner {
     }
 
     pub fn compile_asm(&self) -> Result<String, String> {
-        // Compile the tests in release mode with ASM generation
+        // Compile the tests in release mode with ASM generation and debug symbols for .loc mapping
         let output = Command::new("cargo")
-            .env("RUSTFLAGS", "--emit=asm")
+            .env("RUSTFLAGS", "-g --emit=asm")
             .arg("test")
             .arg("--release")
             .arg("--no-run")
@@ -373,6 +405,70 @@ impl CargoTestRunner {
         }
 
         if in_block { Some(block) } else { None }
+    }
+
+    pub fn extract_asm_block_by_loc(
+        &self,
+        asm_content: &str,
+        target_file: &str,
+        target_line: u64,
+    ) -> Option<String> {
+        let mut file_id = None;
+        let mut in_target_loc = false;
+        let mut block = String::new();
+
+        // Pass 1: Find file ID mapping
+        for line in asm_content.lines() {
+            let tline = line.trim();
+            if tline.starts_with(".file") {
+                let parts: Vec<&str> = tline.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let id = parts[1];
+                    let path = parts[2].trim_matches('"');
+                    if path.contains(target_file) {
+                        file_id = Some(id.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        let file_id = file_id?;
+
+        // Pass 2: Extract block
+        for line in asm_content.lines() {
+            let tline = line.trim();
+            if tline.starts_with(".loc ") {
+                let parts: Vec<&str> = tline.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let id = parts[1];
+                    let l_num = parts[2];
+                    if id == file_id && l_num == target_line.to_string() {
+                        in_target_loc = true;
+                        continue; // Skip the .loc line itself
+                    } else {
+                        if in_target_loc {
+                            break; // End of our target loc
+                        }
+                    }
+                }
+            } else if (tline.starts_with(".Lfunc_end") || tline.starts_with(".cfi_endproc"))
+                && in_target_loc
+            {
+                break;
+            }
+
+            if in_target_loc && !tline.starts_with(".loc") && !tline.starts_with(".file") {
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+
+        if block.trim().is_empty() {
+            None
+        } else {
+            Some(block)
+        }
     }
 
     pub fn extract_asm_block_by_keywords(

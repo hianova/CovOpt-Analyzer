@@ -1,15 +1,17 @@
 pub mod analyzer;
 pub mod config;
 pub mod coverage;
+pub mod entropy;
+pub mod harden;
+pub mod heuristic;
 pub mod mca;
 pub mod profiler;
 pub mod runner;
 pub mod static_analysis;
-pub mod harden;
 
 use clap::{Parser, Subcommand};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use analyzer::{Complexity, ConvergenceAnalyzer};
 use config::CovOptConfig;
@@ -33,8 +35,12 @@ enum Commands {
     InstallHook,
     /// Initialize a default .covopt.toml in the current directory
     Init,
+    /// Automatically fix Clippy warnings and formatting
+    Fix,
     /// Audit all targets defined in .covopt.toml
     Audit,
+    /// Automatically discover the hottest loop and generate .covopt.toml
+    Auto(AutoArgs),
     /// Run mutation testing on a target (Requires cargo-mutants)
     Mutate(MutateArgs),
     /// Run fuzzing on a target (Requires cargo-fuzz and nightly)
@@ -45,6 +51,12 @@ enum Commands {
     Profile(ProfileArgs),
     /// Run a single analysis target (legacy mode)
     Run(RunArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct AutoArgs {
+    /// The name of the test to automatically profile
+    test: String,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -63,7 +75,7 @@ struct FuzzArgs {
 struct SanitizeArgs {
     #[arg(short, long)]
     test: String,
-    
+
     #[arg(long, default_value = "address")]
     san_type: String, // address or thread
 }
@@ -109,6 +121,10 @@ struct RunArgs {
     #[arg(long)]
     require_cache_padding: bool,
 
+    /// Enable symbolic regression to reinvent Lean 4 style formal mathematical proofs
+    #[arg(long)]
+    formalize: bool,
+
     /// Require static branch prediction hint detection
     #[arg(long)]
     require_branch_hints: bool,
@@ -116,6 +132,9 @@ struct RunArgs {
     /// Require strict aerospace grade static analysis
     #[arg(long)]
     require_aerospace_grade: bool,
+
+    #[arg(skip)]
+    _agent_mode_enabled: bool,
 }
 
 fn parse_complexity(s: &str) -> Complexity {
@@ -135,12 +154,15 @@ fn run_analysis(args: &RunArgs) -> bool {
     let test_name = args.test.as_ref().expect("--test is required");
     let expected_str = args.expected.as_ref().expect("--expected is required");
     let n_values_str = args.n_values.as_ref().expect("--n-values is required");
-    let target_file = args.target_file.as_ref().expect("--target-file is required");
+    let target_file = args
+        .target_file
+        .as_ref()
+        .expect("--target-file is required");
     let target_line = args.target_line.expect("--target-line is required");
 
     let expected = parse_complexity(expected_str);
 
-    let n_values: Vec<usize> = n_values_str
+    let _n_values: Vec<usize> = n_values_str
         .split(',')
         .map(|s| s.trim().parse().expect("Failed to parse N value"))
         .collect();
@@ -149,19 +171,21 @@ fn run_analysis(args: &RunArgs) -> bool {
     let output_dir = dir.path().to_path_buf();
     let runner = CargoTestRunner::new(test_name, &output_dir);
 
-    let mut data = Vec::new();
-    let mut target_symbol: Option<String> = None;
-    let mut target_coverage_rate: Option<(u64, u64)> = None;
-
     println!("Starting CovOpt Analysis for test '{}'...", test_name);
     println!("Target: {}:{}", target_file, target_line);
     println!("Expected Complexity: {:?}", expected);
-    println!("Testing N values: {:?}", n_values);
-    println!("---------------------------------------------------");
 
-    for n in n_values {
+    let mut data = Vec::new();
+    let mut space_data = Vec::new();
+    let mut target_symbol: Option<String> = None;
+    let mut target_coverage_rate = None;
+
+    for n_str in args.n_values.as_ref().unwrap().split(',') {
+        let n: u64 = n_str.trim().parse().expect("Invalid N value");
+        println!("---------------------------------------------------");
         println!("Running for N = {}...", n);
-        let map = match runner.run(n) {
+
+        let (map, peak_rss) = match runner.run(n as usize, None) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("Failed to run coverage for N={}: {}", n, e);
@@ -171,12 +195,13 @@ fn run_analysis(args: &RunArgs) -> bool {
 
         let hit_count = map.find_hit_count(target_file, target_line);
         if let Some(h) = hit_count {
-            println!("  -> Hit count = {}", h);
-            data.push((n, h));
+            println!("  -> Hit count = {} | Peak RSS = {} bytes", h, peak_rss);
+            data.push((n as usize, h));
         } else {
             eprintln!("  -> WARNING: No hit count found for target file/line. Assuming 0.");
-            data.push((n, 0));
+            data.push((n as usize, 0));
         }
+        space_data.push((n as usize, peak_rss));
 
         if let Some(ref sym) = target_symbol {
             target_coverage_rate = map.get_function_coverage(sym);
@@ -187,14 +212,35 @@ fn run_analysis(args: &RunArgs) -> bool {
     }
 
     println!("---------------------------------------------------");
-    println!("Analysis Results:");
+    println!("Time Analysis Results:");
     let report = ConvergenceAnalyzer::analyze(&data, expected);
     println!("{:#?}", report);
-    
-    let var_count = static_analysis::analyze_variables(std::path::Path::new(&target_file), target_line as usize);
+
+    println!("---------------------------------------------------");
+    println!("Space Analysis Results (Dynamic Memory):");
+    let space_report = ConvergenceAnalyzer::analyze(&space_data, Complexity::O1);
+    println!(
+        "  -> Actual Space Complexity: {:?}",
+        space_report.actual_trend
+    );
+
+    if args.formalize {
+        println!("---------------------------------------------------");
+        println!(
+            "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof..."
+        );
+        let exact_formula = heuristic::SymbolicRegressor::formalize(&data);
+        println!("  => Formal Proof Discovered: {}", exact_formula);
+    }
+
+    let var_count = static_analysis::analyze_variables(
+        std::path::Path::new(&target_file),
+        target_line as usize,
+    );
     println!("Static Variable Declarations: {}", var_count);
-    
-    let thread_activities = static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
+
+    let thread_activities =
+        static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
     if !thread_activities.is_empty() {
         println!("Static Thread Activities:");
         for act in thread_activities {
@@ -207,16 +253,22 @@ fn run_analysis(args: &RunArgs) -> bool {
     let mut success = true;
 
     if report.is_converged && report.actual_trend > expected {
-        eprintln!("\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}", expected, report.actual_trend);
+        eprintln!(
+            "\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}",
+            expected, report.actual_trend
+        );
         success = false;
     }
-    
+
     if args.require_cache_padding {
-        let has_padding = static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
+        let has_padding =
+            static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
         if has_padding {
             println!("Static Cache Padding: Detected");
         } else {
-            eprintln!("\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target.");
+            eprintln!(
+                "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target."
+            );
             success = false;
         }
     }
@@ -226,17 +278,23 @@ fn run_analysis(args: &RunArgs) -> bool {
         if has_hints {
             println!("Static Branch Hints: Detected");
         } else {
-            eprintln!("\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target.");
+            eprintln!(
+                "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target."
+            );
             success = false;
         }
     }
 
     if args.require_aerospace_grade {
-        let violations = static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
+        let violations =
+            static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
         if violations.is_empty() {
             println!("Static Aerospace Grade: Passed");
         } else {
-            eprintln!("\n[ERROR] Aerospace Grade Violations Detected in {}!", target_file);
+            eprintln!(
+                "\n[ERROR] Aerospace Grade Violations Detected in {}!",
+                target_file
+            );
             for v in violations {
                 eprintln!("  - {}", v);
             }
@@ -266,7 +324,11 @@ fn run_analysis(args: &RunArgs) -> bool {
 
         match runner.compile_asm() {
             Ok(asm_content) => {
-                let mut asm_block_opt = runner.extract_asm_block(&asm_content, &symbol);
+                let mut asm_block_opt =
+                    runner.extract_asm_block_by_loc(&asm_content, target_file, target_line);
+                if asm_block_opt.is_none() {
+                    asm_block_opt = runner.extract_asm_block(&asm_content, &symbol);
+                }
                 if asm_block_opt.is_none() {
                     let demangled = rustc_demangle::demangle(&symbol).to_string();
                     let no_trailing_generics = match demangled.rfind(">::") {
@@ -275,16 +337,38 @@ fn run_analysis(args: &RunArgs) -> bool {
                     };
                     let parts: Vec<&str> = no_trailing_generics.split("::").collect();
                     if parts.len() >= 2 {
-                        let fn_name = parts.last().unwrap_or(&"").split('<').next().unwrap_or("").trim();
+                        let fn_name = parts
+                            .last()
+                            .unwrap_or(&"")
+                            .split('<')
+                            .next()
+                            .unwrap_or("")
+                            .trim();
                         let struct_part = parts[parts.len() - 2];
-                        let struct_name = struct_part.split('<').next().unwrap_or("").split('[').next().unwrap_or("").trim().trim_start_matches(['<', '[']);
-                        
-                        println!("  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...", struct_name, fn_name);
-                        asm_block_opt = runner.extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
+                        let struct_name = struct_part
+                            .split('<')
+                            .next()
+                            .unwrap_or("")
+                            .split('[')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .trim_start_matches(['<', '[']);
+
+                        println!(
+                            "  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...",
+                            struct_name, fn_name
+                        );
+                        asm_block_opt = runner
+                            .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
                     }
                     if asm_block_opt.is_none() {
-                        println!("  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...", test_name);
-                        asm_block_opt = runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
+                        println!(
+                            "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...",
+                            test_name
+                        );
+                        asm_block_opt =
+                            runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
                     }
                 }
 
@@ -305,7 +389,9 @@ fn run_analysis(args: &RunArgs) -> bool {
                         Err(e) => eprintln!("LLVM-MCA failed: {}", e),
                     }
                 } else {
-                    eprintln!("Could not extract ASM block for symbol. The function might be inlined in release mode.");
+                    eprintln!(
+                        "Could not extract ASM block for symbol. The function might be inlined in release mode."
+                    );
                 }
             }
             Err(e) => eprintln!("ASM compilation failed: {}", e),
@@ -313,7 +399,25 @@ fn run_analysis(args: &RunArgs) -> bool {
     } else {
         println!("Could not extract target symbol name from coverage data. Skipping MCA analysis.");
     }
-    
+
+    // --- Energy / Thermal Guidance (High Frequency Polling Detection) ---
+    let max_hit_count = data.iter().map(|&(_, h)| h).max().unwrap_or(0);
+    let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1);
+
+    if max_hit_count > 50_000 && max_hit_count > (max_n as u64) * 100 {
+        println!("\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <");
+        println!(
+            "Detected astronomically high hit count ({}) relative to workload (N={}).",
+            max_hit_count, max_n
+        );
+        println!(
+            "This indicates 'High-Frequency Invalid Polling' (Busy-waiting) in a loop, which will cause 100% single-core CPU usage and severe device overheating."
+        );
+        println!(
+            "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch."
+        );
+    }
+
     success
 }
 
@@ -343,7 +447,10 @@ fi
         perms.set_mode(0o755);
         fs::set_permissions(&hook_path, perms).unwrap();
     }
-    println!("Successfully installed pre-commit hook to {}", hook_path.display());
+    println!(
+        "Successfully installed pre-commit hook to {}",
+        hook_path.display()
+    );
 }
 
 fn init_config() {
@@ -353,7 +460,9 @@ fn init_config() {
         std::process::exit(1);
     }
 
-    let default_config = r#"[[target]]
+    let default_config = r#"agent_deterrence = true
+
+[[target]]
 test = "my_benchmark_test"
 expected = "O(1)"
 n_values = "100,500,1000"
@@ -369,6 +478,65 @@ require_aerospace_grade = false
         std::process::exit(1);
     }
     println!("Successfully initialized .covopt.toml. Please edit it to match your target.");
+
+    // Append to .gitignore
+    if let Ok(mut content) = std::fs::read_to_string(".gitignore") {
+        if !content.contains(".covopt/") {
+            if !content.ends_with('\n') && !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(".covopt/\n");
+            let _ = std::fs::write(".gitignore", content);
+            println!("Added .covopt/ to .gitignore.");
+        }
+    } else {
+        let _ = std::fs::write(".gitignore", ".covopt/\n");
+        println!("Created .gitignore and added .covopt/.");
+    }
+
+    // Append to Cargo.toml exclude
+    if let Ok(mut content) = std::fs::read_to_string("Cargo.toml")
+        && !content.contains("\".covopt/\"")
+        && !content.contains("'.covopt/'")
+    {
+        if let Some(idx) = content.find("exclude = [") {
+            let insert_pos = idx + "exclude = [".len();
+            content.insert_str(insert_pos, "\".covopt/\", ");
+            let _ = std::fs::write("Cargo.toml", content);
+            println!("Added .covopt/ to exclude array in Cargo.toml.");
+        } else if let Some(idx) = content.find("[package]") {
+            let end_idx = content[idx..]
+                .find("\n[")
+                .map(|i| idx + i)
+                .unwrap_or(content.len());
+            content.insert_str(end_idx, "\nexclude = [\".covopt/\"]\n");
+            let _ = std::fs::write("Cargo.toml", content);
+            println!("Added exclude = [\".covopt/\"] to Cargo.toml [package] section.");
+        }
+    }
+}
+
+fn run_fix() {
+    println!("CovOpt-Analyzer: Running auto-correction (cargo clippy --fix)...");
+    let status = std::process::Command::new("cargo")
+        .args([
+            "clippy",
+            "--fix",
+            "--allow-dirty",
+            "--allow-no-vcs",
+            "--all-targets",
+        ])
+        .status()
+        .expect("Failed to execute cargo clippy");
+
+    if status.success() {
+        println!("CovOpt-Analyzer: Auto-correction completed successfully.");
+    } else {
+        eprintln!(
+            "CovOpt-Analyzer: Auto-correction encountered errors (some issues might need manual fixing)."
+        );
+        std::process::exit(1);
+    }
 }
 
 fn run_audit() {
@@ -386,6 +554,26 @@ fn run_audit() {
         }
     };
 
+    let agent_mode_enabled =
+        config.agent_deterrence.unwrap_or(true) || std::env::var("COVOPT_AGENT_MODE").is_ok();
+    if agent_mode_enabled {
+        for file_name in &["task.md", ".covopt_plan.md", "implementation_plan.md"] {
+            if let Ok(content) = std::fs::read_to_string(file_name)
+                && content.contains("- [ ]")
+            {
+                eprintln!("\n> [!ERROR] AGENT PENALTY: Checklist Barrier Active! <");
+                eprintln!("Found incomplete tasks (`- [ ]`) in `{}`.", file_name);
+                eprintln!(
+                    "Please fully complete your planning checklist before running `covopt audit`."
+                );
+                eprintln!(
+                    "Do NOT use trial-and-error to guess the fix. Read the codebase holistically."
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     let mut all_success = true;
     for target in config.target {
         let args = RunArgs {
@@ -394,16 +582,61 @@ fn run_audit() {
             n_values: Some(target.n_values.clone()),
             target_file: Some(target.target_file.clone()),
             target_line: Some(target.target_line),
-            mca_cpu: target.mca_cpu,
+            mca_cpu: target.mca_cpu.clone(),
             require_cache_padding: target.require_cache_padding.unwrap_or(false),
             require_branch_hints: target.require_branch_hints.unwrap_or(false),
             require_aerospace_grade: target.require_aerospace_grade.unwrap_or(false),
+            formalize: false, // Audit defaults to false unless specified
+            _agent_mode_enabled: agent_mode_enabled,
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
         println!("===================================================");
         if !run_analysis(&args) {
             all_success = false;
+        }
+
+        // --- COVOPT 2.0 ENTROPY EVALUATION ---
+        let entropy_result = entropy::calculate_entropy_score(&target);
+        println!("\n=== COVOPT 2.0 ENTROPY REPORT ===");
+        println!(
+            "  A. Fuzz-Cov Variance: {:.1}/30.0",
+            entropy_result.fuzz_variance_score
+        );
+        println!(
+            "  B. API Branch Sprawl: {:.1}/40.0",
+            entropy_result.branch_sprawl_score
+        );
+        println!(
+            "  C. CLI Noise Index:   {:.1}/30.0",
+            entropy_result.cli_noise_score
+        );
+        println!("  --------------------------------");
+        println!(
+            "  TOTAL ENTROPY SCORE:  {:.1}/100.0",
+            entropy_result.total_score
+        );
+
+        if entropy_result.total_score > 50.0 {
+            eprintln!(
+                "  [!] WARNING: High Entropy Detected! Codebase is unstable, tangled, or noisy."
+            );
+            all_success = false;
+        } else {
+            println!("  [OK] Low Entropy. Code is well encapsulated and stable.");
+        }
+        println!("===================================");
+
+        // --- AGENT DETERRENCE TRUNCATION ---
+        if !all_success && agent_mode_enabled {
+            eprintln!("\n> [!ERROR] AGENT PENALTY TRUNCATION ACTIVE <");
+            eprintln!(
+                "Detailed logs and further targets have been truncated to prevent context waste."
+            );
+            eprintln!(
+                "Please fully rethink and implement your holistic solution before re-running audit."
+            );
+            std::process::exit(1);
         }
     }
 
@@ -415,11 +648,103 @@ fn run_audit() {
     }
 }
 
+fn run_auto_discovery(test_name: &str) {
+    println!(
+        "CovOpt-Analyzer: Running Auto-Discovery for test '{}'...",
+        test_name
+    );
+
+    let config_path = PathBuf::from(".covopt.toml");
+    if config_path.exists() {
+        eprintln!(
+            "CovOpt-Analyzer: .covopt.toml already exists! Auto-discovery will overwrite it."
+        );
+        eprintln!("Please remove or rename it first if you want to regenerate.");
+        std::process::exit(1);
+    }
+
+    let output_dir = PathBuf::from(".covopt");
+    let runner = CargoTestRunner::new(test_name, &output_dir);
+
+    // Run the test once with N=1000 (a reasonably high number to saturate loops)
+    let (map, _) = match runner.run(1000, None) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("CovOpt-Analyzer: Failed to run test {}: {}", test_name, e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut max_count = 0;
+    let mut hot_file = String::new();
+    let mut hot_line = 0;
+
+    for (file, file_cov) in &map.hit_counts {
+        // Skip std and registry paths to focus on user code
+        if file.contains("/.cargo/registry") || file.contains("/rustc/") {
+            continue;
+        }
+
+        for (&line, &count) in file_cov {
+            if count > max_count {
+                max_count = count;
+                hot_file = file.clone();
+                hot_line = line;
+            }
+        }
+    }
+
+    if max_count == 0 {
+        eprintln!("CovOpt-Analyzer: Auto-discovery failed. No execution counts found!");
+        std::process::exit(1);
+    }
+
+    // Clean up absolute paths to relative paths if possible
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let relative_file = if let Ok(rel) = Path::new(&hot_file).strip_prefix(&cwd) {
+        rel.display().to_string()
+    } else {
+        hot_file
+    };
+
+    println!("\n> [!TIP] Auto-Discovery Complete!");
+    println!(
+        "🔥 Hottest Loop Detected: {}:{} (Hit Count: {})",
+        relative_file, hot_line, max_count
+    );
+
+    let generated_config = format!(
+        r#"agent_deterrence = true
+
+[[target]]
+test = "{}"
+expected = "O(N)"
+n_values = "100,500,1000"
+target_file = "{}"
+target_line = {}
+require_cache_padding = false
+require_branch_hints = false
+require_aerospace_grade = false
+"#,
+        test_name, relative_file, hot_line
+    );
+
+    if let Err(e) = std::fs::write(&config_path, generated_config) {
+        eprintln!("Failed to write .covopt.toml: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("Successfully generated `.covopt.toml` targeting the absolute hottest path.");
+    println!("You can now run `covopt audit` to perform the complexity and MCA analysis.");
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Some(Commands::Init) => init_config(),
+        Some(Commands::Auto(args)) => run_auto_discovery(&args.test),
+        Some(Commands::Fix) => run_fix(),
         Some(Commands::InstallHook) => install_hook(),
         Some(Commands::Audit) => run_audit(),
         Some(Commands::Mutate(args)) => {

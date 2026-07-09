@@ -1,8 +1,11 @@
+agent_deterrence = true
+
 [[target]]
-test = "test_calculate_r_squared_complexity"
-expected = "ON"
+test = "test_scheduler_o1_complexity"
+expected = "O1"
 n_values = "100,500,1000"
-target_file = "src/analyzer.rs"
-target_line = 220
+target_file = "tests/ruinsos_scheduler.rs"
+target_line = 16
 require_cache_padding = false
 require_branch_hints = false
+require_aerospace_grade = false

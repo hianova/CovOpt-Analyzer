@@ -3,9 +3,9 @@ use std::collections::HashMap;
 #[derive(Debug, Default)]
 pub struct CoverageMap {
     // hit_counts[file_path][line_number] = execution_count
-    hit_counts: HashMap<String, HashMap<u64, u64>>,
+    pub hit_counts: HashMap<String, HashMap<u64, u64>>,
     // symbol_map[file_path][line_number] = mangled_symbol_name
-    symbol_map: HashMap<String, HashMap<u64, String>>,
+    pub symbol_map: HashMap<String, HashMap<u64, String>>,
 }
 
 impl CoverageMap {
