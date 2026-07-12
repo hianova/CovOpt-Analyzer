@@ -7,9 +7,11 @@ name = "CovOpt-Analyzer"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "proc-macro2",
  "rustc-demangle",
  "serde",
  "serde_json",
+ "syn",
  "tempfile",
  "toml",
 ]

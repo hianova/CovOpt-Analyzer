@@ -9,3 +9,13 @@ target_line = 16
 require_cache_padding = false
 require_branch_hints = false
 require_aerospace_grade = false
+
+[[target]]
+test = "test_spin_mutex_heavy_contention"
+expected = "O1"
+n_values = "10,50,100"
+target_file = "tests/spin_deadlock.rs"
+target_line = 80
+require_cache_padding = false
+require_branch_hints = false
+require_aerospace_grade = false

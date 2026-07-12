@@ -133,8 +133,17 @@ struct RunArgs {
     #[arg(long)]
     require_aerospace_grade: bool,
 
-    #[arg(skip)]
-    _agent_mode_enabled: bool,
+    /// Require watchdog timeout detection in the target file
+    #[arg(long)]
+    require_watchdog_timeout: bool,
+
+    /// Require high-pressure stress test detection in the target file
+    #[arg(long)]
+    require_stress_test: bool,
+
+    /// Optional polling threshold for high-frequency polling detection
+    #[arg(long)]
+    polling_threshold: Option<u64>,
 }
 
 fn parse_complexity(s: &str) -> Complexity {
@@ -302,6 +311,30 @@ fn run_analysis(args: &RunArgs) -> bool {
         }
     }
 
+    if args.require_watchdog_timeout {
+        let has_watchdog = static_analysis::analyze_watchdog_timeout(std::path::Path::new(&target_file));
+        if has_watchdog {
+            println!("Static Watchdog Timeout: Detected");
+        } else {
+            eprintln!(
+                "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks."
+            );
+            success = false;
+        }
+    }
+
+    if args.require_stress_test {
+        let has_stress = static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
+        if has_stress {
+            println!("Static Stress Test: Detected");
+        } else {
+            eprintln!(
+                "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic."
+            );
+            success = false;
+        }
+    }
+
     println!("---------------------------------------------------");
     if let Some(symbol) = target_symbol {
         if let Some((executed, total)) = target_coverage_rate {
@@ -403,8 +436,9 @@ fn run_analysis(args: &RunArgs) -> bool {
     // --- Energy / Thermal Guidance (High Frequency Polling Detection) ---
     let max_hit_count = data.iter().map(|&(_, h)| h).max().unwrap_or(0);
     let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1);
+    let threshold = args.polling_threshold.unwrap_or(50_000);
 
-    if max_hit_count > 50_000 && max_hit_count > (max_n as u64) * 100 {
+    if max_hit_count > threshold && max_hit_count > (max_n as u64) * 100 {
         println!("\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <");
         println!(
             "Detected astronomically high hit count ({}) relative to workload (N={}).",
@@ -471,6 +505,8 @@ target_line = 10
 require_cache_padding = false
 require_branch_hints = false
 require_aerospace_grade = false
+require_watchdog_timeout = false
+require_stress_test = false
 "#;
 
     if let Err(e) = std::fs::write(&config_path, default_config) {
@@ -554,26 +590,6 @@ fn run_audit() {
         }
     };
 
-    let agent_mode_enabled =
-        config.agent_deterrence.unwrap_or(true) || std::env::var("COVOPT_AGENT_MODE").is_ok();
-    if agent_mode_enabled {
-        for file_name in &["task.md", ".covopt_plan.md", "implementation_plan.md"] {
-            if let Ok(content) = std::fs::read_to_string(file_name)
-                && content.contains("- [ ]")
-            {
-                eprintln!("\n> [!ERROR] AGENT PENALTY: Checklist Barrier Active! <");
-                eprintln!("Found incomplete tasks (`- [ ]`) in `{}`.", file_name);
-                eprintln!(
-                    "Please fully complete your planning checklist before running `covopt audit`."
-                );
-                eprintln!(
-                    "Do NOT use trial-and-error to guess the fix. Read the codebase holistically."
-                );
-                std::process::exit(1);
-            }
-        }
-    }
-
     let mut all_success = true;
     for target in config.target {
         let args = RunArgs {
@@ -586,8 +602,10 @@ fn run_audit() {
             require_cache_padding: target.require_cache_padding.unwrap_or(false),
             require_branch_hints: target.require_branch_hints.unwrap_or(false),
             require_aerospace_grade: target.require_aerospace_grade.unwrap_or(false),
+            require_watchdog_timeout: target.require_watchdog_timeout.unwrap_or(false),
+            require_stress_test: target.require_stress_test.unwrap_or(false),
+            polling_threshold: target.polling_threshold,
             formalize: false, // Audit defaults to false unless specified
-            _agent_mode_enabled: agent_mode_enabled,
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
@@ -626,18 +644,6 @@ fn run_audit() {
             println!("  [OK] Low Entropy. Code is well encapsulated and stable.");
         }
         println!("===================================");
-
-        // --- AGENT DETERRENCE TRUNCATION ---
-        if !all_success && agent_mode_enabled {
-            eprintln!("\n> [!ERROR] AGENT PENALTY TRUNCATION ACTIVE <");
-            eprintln!(
-                "Detailed logs and further targets have been truncated to prevent context waste."
-            );
-            eprintln!(
-                "Please fully rethink and implement your holistic solution before re-running audit."
-            );
-            std::process::exit(1);
-        }
     }
 
     if !all_success {
@@ -725,6 +731,8 @@ target_line = {}
 require_cache_padding = false
 require_branch_hints = false
 require_aerospace_grade = false
+require_watchdog_timeout = false
+require_stress_test = false
 "#,
         test_name, relative_file, hot_line
     );

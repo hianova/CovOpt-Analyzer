@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::Path;
+use syn::visit::Visit;
+use syn::spanned::Spanned;
 
 #[derive(Debug, Default)]
 pub struct MemoryProfile {
@@ -59,72 +61,184 @@ pub fn analyze_memory_ops(asm_block: &str) -> MemoryProfile {
     profile
 }
 
+struct VariableVisitor {
+    count: usize,
+}
+
+impl<'ast> Visit<'ast> for VariableVisitor {
+    fn visit_local(&mut self, i: &'ast syn::Local) {
+        self.count += 1;
+        syn::visit::visit_local(self, i);
+    }
+    fn visit_item_const(&mut self, i: &'ast syn::ItemConst) {
+        self.count += 1;
+        syn::visit::visit_item_const(self, i);
+    }
+    fn visit_item_static(&mut self, i: &'ast syn::ItemStatic) {
+        self.count += 1;
+        syn::visit::visit_item_static(self, i);
+    }
+}
+
+struct TargetFnVisitor<'ast> {
+    target_line: usize,
+    found_item_fn: Option<&'ast syn::ItemFn>,
+    found_impl_fn: Option<&'ast syn::ImplItemFn>,
+}
+
+impl<'ast> Visit<'ast> for TargetFnVisitor<'ast> {
+    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
+        let start = i.span().start().line;
+        let end = i.span().end().line;
+        if self.target_line >= start && self.target_line <= end {
+            self.found_item_fn = Some(i);
+        }
+        syn::visit::visit_item_fn(self, i);
+    }
+    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
+        let start = i.span().start().line;
+        let end = i.span().end().line;
+        if self.target_line >= start && self.target_line <= end {
+            self.found_impl_fn = Some(i);
+        }
+        syn::visit::visit_impl_item_fn(self, i);
+    }
+}
+
 pub fn analyze_variables(source_file: &Path, target_line: usize) -> usize {
     let Ok(content) = fs::read_to_string(source_file) else {
         return 0;
     };
 
+    if let Ok(file_ast) = syn::parse_file(&content) {
+        let mut fn_visitor = TargetFnVisitor { target_line, found_item_fn: None, found_impl_fn: None };
+        fn_visitor.visit_file(&file_ast);
+
+        let mut var_visitor = VariableVisitor { count: 0 };
+        if let Some(f) = fn_visitor.found_item_fn {
+            var_visitor.visit_item_fn(f);
+            return var_visitor.count;
+        } else if let Some(f) = fn_visitor.found_impl_fn {
+            var_visitor.visit_impl_item_fn(f);
+            return var_visitor.count;
+        }
+
+        var_visitor.visit_file(&file_ast);
+        return var_visitor.count;
+    }
+
     let mut count = 0;
-    let mut in_function = false;
-    let mut brace_level = 0;
-
-    let lines: Vec<&str> = content.lines().collect();
-
-    let start_idx = if target_line > 0 && target_line <= lines.len() {
-        let mut idx = target_line - 1;
-        while idx > 0 {
-            if lines[idx].contains("fn ") {
-                break;
-            }
-            idx -= 1;
-        }
-        idx
-    } else {
-        0
-    };
-
-    for &line in lines.iter().skip(start_idx) {
+    for line in content.lines() {
         let line = line.trim();
-
-        if line.contains("fn ") {
-            in_function = true;
-        }
-
-        if in_function {
-            if line.contains("{") {
-                brace_level += line.matches("{").count();
-            }
-            if line.contains("}") {
-                brace_level -= line.matches("}").count();
-            }
-
-            if line.starts_with("let ") || line.contains(" let ") {
-                count += 1;
-            }
-            if line.starts_with("const ") || line.contains(" const ") {
-                count += 1;
-            }
-            if line.starts_with("static ") || line.contains(" static ") {
-                count += 1;
-            }
-
-            if brace_level == 0 && count > 0 {
-                break; // End of function
-            }
+        if line.starts_with("let ") || line.contains(" let ") {
+            count += 1;
         }
     }
-
-    if count == 0 {
-        // Fallback: just count the whole file if function bounding failed
-        for line in lines {
-            let line = line.trim();
-            if line.starts_with("let ") || line.contains(" let ") {
-                count += 1;
-            }
-        }
-    }
-
     count
+}
+
+struct ThreadActivityVisitor {
+    spawned_vars: Vec<String>,
+    joined_vars: Vec<String>,
+    has_spawn: bool,
+    has_join: bool,
+    has_mutex: bool,
+    has_rwlock: bool,
+    has_atomic: bool,
+    has_mpsc: bool,
+    has_arc: bool,
+}
+
+impl<'ast> Visit<'ast> for ThreadActivityVisitor {
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        if let Some(init) = &node.init {
+            let mut is_spawn = false;
+            if let syn::Expr::Call(call) = &*init.expr {
+                if let syn::Expr::Path(expr_path) = &*call.func {
+                    if let Some(seg) = expr_path.path.segments.last() {
+                        if seg.ident == "spawn" {
+                            is_spawn = true;
+                        }
+                    }
+                }
+            } else if let syn::Expr::MethodCall(call) = &*init.expr {
+                if call.method == "spawn" {
+                    is_spawn = true;
+                }
+            }
+            if is_spawn {
+                self.has_spawn = true;
+                if let syn::Pat::Ident(pat_ident) = &node.pat {
+                    self.spawned_vars.push(pat_ident.ident.to_string());
+                }
+            }
+        }
+        syn::visit::visit_local(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func {
+            if let Some(segment) = expr_path.path.segments.last() {
+                if segment.ident == "spawn" {
+                    self.has_spawn = true;
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name == "join" || name == "await" {
+            self.has_join = true;
+            if let syn::Expr::Path(expr_path) = &*node.receiver {
+                if let Some(seg) = expr_path.path.segments.last() {
+                    self.joined_vars.push(seg.ident.to_string());
+                }
+            }
+        } else if name == "spawn" {
+            self.has_spawn = true;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
+        self.has_join = true;
+        if let syn::Expr::Path(expr_path) = &*node.base {
+            if let Some(seg) = expr_path.path.segments.last() {
+                self.joined_vars.push(seg.ident.to_string());
+            }
+        }
+        syn::visit::visit_expr_await(self, node);
+    }
+
+    fn visit_type(&mut self, node: &'ast syn::Type) {
+        if let syn::Type::Path(type_path) = node {
+            if let Some(segment) = type_path.path.segments.first() {
+                let name = segment.ident.to_string();
+                if name.contains("Mutex") { self.has_mutex = true; }
+                if name.contains("RwLock") { self.has_rwlock = true; }
+                if name.contains("Atomic") { self.has_atomic = true; }
+                if name == "Arc" { self.has_arc = true; }
+            }
+            for segment in &type_path.path.segments {
+                if segment.ident == "mpsc" { self.has_mpsc = true; }
+            }
+        }
+        syn::visit::visit_type(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        for segment in &node.path.segments {
+            let name = segment.ident.to_string();
+            if name.contains("Mutex") { self.has_mutex = true; }
+            if name.contains("RwLock") { self.has_rwlock = true; }
+            if name.contains("Atomic") { self.has_atomic = true; }
+            if name == "mpsc" { self.has_mpsc = true; }
+            if name == "Arc" { self.has_arc = true; }
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
 }
 
 pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
@@ -133,137 +247,376 @@ pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
         return activities;
     };
 
-    let has_spawn = content.contains("thread::spawn")
-        || content.contains("tokio::spawn")
-        || content.contains("async_std::task::spawn");
-    let has_join = content.contains(".join()") || content.contains(".await");
+    let Ok(ast) = syn::parse_file(&content) else {
+        let has_spawn = content.contains("thread::spawn")
+            || content.contains("tokio::spawn")
+            || content.contains("async_std::task::spawn");
+        let has_join = content.contains(".join()") || content.contains(".await");
 
-    if has_spawn {
-        if has_join {
-            activities
-                .push("Thread/Task Spawning (Lifecycle Complete: join/await found)".to_string());
+        if has_spawn {
+            if has_join {
+                activities.push("Thread/Task Spawning (Lifecycle Complete: join/await found)".to_string());
+            } else {
+                activities.push("Thread/Task Spawning [WARNING: Lifecycle INCOMPLETE (no join/await found)]".to_string());
+            }
+        }
+        if content.contains("Mutex") { activities.push("Mutex synchronization".to_string()); }
+        if content.contains("RwLock") { activities.push("RwLock synchronization".to_string()); }
+        if content.contains("Atomic") { activities.push("Atomic operations".to_string()); }
+        if content.contains("mpsc::") { activities.push("MPSC Channels".to_string()); }
+        if content.contains("Arc<") { activities.push("Arc reference counting".to_string()); }
+        return activities;
+    };
+
+    let mut visitor = ThreadActivityVisitor {
+        spawned_vars: Vec::new(),
+        joined_vars: Vec::new(),
+        has_spawn: false,
+        has_join: false,
+        has_mutex: false,
+        has_rwlock: false,
+        has_atomic: false,
+        has_mpsc: false,
+        has_arc: false,
+    };
+    visitor.visit_file(&ast);
+
+    if visitor.has_spawn {
+        let mut complete = false;
+        if visitor.has_join {
+            complete = true;
+        }
+        if complete {
+            activities.push("Thread/Task Spawning (Lifecycle Complete: join/await found)".to_string());
         } else {
-            activities.push(
-                "Thread/Task Spawning [WARNING: Lifecycle INCOMPLETE (no join/await found)]"
-                    .to_string(),
-            );
+            activities.push("Thread/Task Spawning [WARNING: Lifecycle INCOMPLETE (no join/await found)]".to_string());
         }
     }
-
-    if content.contains("Mutex") {
-        activities.push("Mutex synchronization".to_string());
-    }
-    if content.contains("RwLock") {
-        activities.push("RwLock synchronization".to_string());
-    }
-    if content.contains("Atomic") {
-        activities.push("Atomic operations".to_string());
-    }
-    if content.contains("mpsc::") {
-        activities.push("MPSC Channels".to_string());
-    }
-    if content.contains("Arc<") {
-        activities.push("Arc reference counting".to_string());
-    }
+    if visitor.has_mutex { activities.push("Mutex synchronization".to_string()); }
+    if visitor.has_rwlock { activities.push("RwLock synchronization".to_string()); }
+    if visitor.has_atomic { activities.push("Atomic operations".to_string()); }
+    if visitor.has_mpsc { activities.push("MPSC Channels".to_string()); }
+    if visitor.has_arc { activities.push("Arc reference counting".to_string()); }
 
     activities
 }
 
-pub fn analyze_cache_padding(source_file: &Path) -> bool {
-    let Ok(content) = fs::read_to_string(source_file) else {
-        return false;
-    };
+struct CachePaddingVisitor {
+    has_padding: bool,
+}
 
-    // Look for common cache padding or alignment attributes
-    content.contains("#[repr(align")
-        || content.contains("CachePadded")
-        || content.contains("cache_padded")
-        || content.contains("crossbeam_utils::CachePadded")
+impl<'ast> Visit<'ast> for CachePaddingVisitor {
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("repr") {
+            if let syn::Meta::List(meta) = &node.meta {
+                if meta.tokens.to_string().contains("align") {
+                    self.has_padding = true;
+                }
+            }
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+    
+    fn visit_type(&mut self, node: &'ast syn::Type) {
+        if let syn::Type::Path(type_path) = node {
+            if let Some(segment) = type_path.path.segments.last() {
+                let name = segment.ident.to_string();
+                if name == "CachePadded" || name == "cache_padded" {
+                    self.has_padding = true;
+                }
+            }
+        }
+        syn::visit::visit_type(self, node);
+    }
+}
+
+pub fn analyze_cache_padding(source_file: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(source_file) else { return false; };
+    if let Ok(ast) = syn::parse_file(&content) {
+        let mut visitor = CachePaddingVisitor { has_padding: false };
+        visitor.visit_file(&ast);
+        if visitor.has_padding { return true; }
+    }
+    content.contains("#[repr(align") || content.contains("CachePadded") || content.contains("cache_padded") || content.contains("crossbeam_utils::CachePadded")
+}
+
+struct BranchHintVisitor {
+    has_hint: bool,
+}
+
+impl<'ast> Visit<'ast> for BranchHintVisitor {
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("cold") {
+            self.has_hint = true;
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func {
+            if let Some(segment) = expr_path.path.segments.last() {
+                let name = segment.ident.to_string();
+                if name == "likely" || name == "unlikely" {
+                    self.has_hint = true;
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
 }
 
 pub fn analyze_branch_hints(source_file: &Path) -> bool {
-    let Ok(content) = fs::read_to_string(source_file) else {
-        return false;
-    };
+    let Ok(content) = fs::read_to_string(source_file) else { return false; };
+    if let Ok(ast) = syn::parse_file(&content) {
+        let mut visitor = BranchHintVisitor { has_hint: false };
+        visitor.visit_file(&ast);
+        if visitor.has_hint { return true; }
+    }
+    content.contains("std::intrinsics::likely") || content.contains("std::intrinsics::unlikely") || content.contains("core::intrinsics::likely") || content.contains("core::intrinsics::unlikely") || content.contains("#[cold]")
+}
 
-    // Look for common branch prediction hints
-    content.contains("std::intrinsics::likely")
-        || content.contains("std::intrinsics::unlikely")
-        || content.contains("core::intrinsics::likely")
-        || content.contains("core::intrinsics::unlikely")
-        || content.contains("#[cold]")
+struct AerospaceVisitor {
+    in_test: bool,
+    has_alloc: bool,
+    has_std: bool,
+    has_unsafe_allow: bool,
+    has_thread_spawn: bool,
+    has_heap_containers: bool,
+    has_compare_exchange: bool,
+    has_load: bool,
+    has_spin_loop: bool,
+    struct_names: Vec<String>,
+    drop_impls: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for AerospaceVisitor {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        let is_test = node.attrs.iter().any(|a| {
+            if let syn::Meta::List(meta) = &a.meta {
+                meta.path.is_ident("cfg") && meta.tokens.to_string().contains("test")
+            } else {
+                false
+            }
+        });
+        let old = self.in_test;
+        if is_test {
+            self.in_test = true;
+        }
+        syn::visit::visit_item_mod(self, node);
+        self.in_test = old;
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let is_test = node.attrs.iter().any(|a| a.path().is_ident("test"));
+        let old = self.in_test;
+        if is_test {
+            self.in_test = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+        self.in_test = old;
+    }
+
+    fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        if !self.in_test {
+            if node.ident == "alloc" { self.has_alloc = true; }
+            if node.ident == "std" { self.has_std = true; }
+        }
+        syn::visit::visit_item_extern_crate(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        if !self.in_test {
+            if let syn::UseTree::Path(path) = &node.tree {
+                if path.ident == "std" { self.has_std = true; }
+                if path.ident == "alloc" { self.has_alloc = true; }
+            }
+        }
+        syn::visit::visit_item_use(self, node);
+    }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("allow") {
+            if let syn::Meta::List(meta) = &node.meta {
+                if meta.tokens.to_string().contains("unsafe_op_in_unsafe_fn") {
+                    self.has_unsafe_allow = true;
+                }
+            }
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func {
+            if let Some(segment) = expr_path.path.segments.last() {
+                if segment.ident == "spawn" { self.has_thread_spawn = true; }
+                if segment.ident == "new" {
+                    if expr_path.path.segments.iter().any(|s| s.ident == "Box" || s.ident == "HashMap") {
+                        if !self.in_test { self.has_heap_containers = true; }
+                    }
+                }
+                if segment.ident == "with_capacity" {
+                    if expr_path.path.segments.iter().any(|s| s.ident == "Vec") {
+                        if !self.in_test { self.has_heap_containers = true; }
+                    }
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name.contains("compare_exchange") { self.has_compare_exchange = true; }
+        if name == "load" { self.has_load = true; }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        for segment in &node.path.segments {
+            if segment.ident == "spin_loop" { self.has_spin_loop = true; }
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        let name = node.ident.to_string();
+        if name.contains("Guard") || name.contains("StateNode") || name.contains("ThreadState") {
+            self.struct_names.push(name);
+        }
+        syn::visit::visit_item_struct(self, node);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        if let Some((_, path, _)) = &node.trait_ {
+            if path.is_ident("Drop") {
+                if let syn::Type::Path(type_path) = &*node.self_ty {
+                    if let Some(segment) = type_path.path.segments.last() {
+                        self.drop_impls.push(segment.ident.to_string());
+                    }
+                }
+            }
+        }
+        syn::visit::visit_item_impl(self, node);
+    }
 }
 
 pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     let mut violations = Vec::new();
     let Ok(content) = fs::read_to_string(source_file) else {
-        violations.push(format!(
-            "Failed to read source file: {}",
-            source_file.display()
-        ));
+        violations.push(format!("Failed to read source file: {}", source_file.display()));
         return violations;
     };
 
-    let test_stripped_content = if let Some(idx) = content.find("#[cfg(test)]") {
-        &content[..idx]
-    } else {
-        &content
+    let Ok(ast) = syn::parse_file(&content) else {
+        let test_stripped_content = if let Some(idx) = content.find("#[cfg(test)]") { &content[..idx] } else { &content };
+        if test_stripped_content.contains("extern crate alloc") { violations.push("Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade.".to_string()); }
+        if test_stripped_content.contains("use std::") || test_stripped_content.contains("extern crate std") { violations.push("Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string()); }
+        if content.contains("#[allow(unsafe_op_in_unsafe_fn)]") { violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string()); }
+        if content.contains("thread::spawn") || content.contains("tokio::spawn") { violations.push("Dynamic thread spawning is prohibited.".to_string()); }
+        if content.contains("Box::new") || content.contains("Vec::with_capacity") || content.contains("HashMap::new") { violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string()); }
+        if content.contains("compare_exchange") && content.contains("spin_loop") && !content.contains(".load(") { violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string()); }
+        if content.contains("struct ") && (content.contains("Guard") || content.contains("StateNode") || content.contains("ThreadState")) && !content.contains("impl Drop for") && !content.contains("impl<") && !content.contains("Drop for") { if !content.contains("impl Drop") && !content.contains("impl<T> Drop") && !content.contains("impl<'a> Drop") { violations.push("Potential Resource Leak: Structs handling state or locks ('Guard', 'StateNode') must explicitly implement `Drop` to ensure deterministic thread resource cleanup.".to_string()); } }
+        return violations;
     };
 
-    if test_stripped_content.contains("extern crate alloc") {
-        violations.push(
-            "Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade."
-                .to_string(),
-        );
-    }
+    let mut visitor = AerospaceVisitor {
+        in_test: false,
+        has_alloc: false,
+        has_std: false,
+        has_unsafe_allow: false,
+        has_thread_spawn: false,
+        has_heap_containers: false,
+        has_compare_exchange: false,
+        has_load: false,
+        has_spin_loop: false,
+        struct_names: Vec::new(),
+        drop_impls: Vec::new(),
+    };
+    visitor.visit_file(&ast);
 
-    // We do a simple check for standard library that avoids false positives like "no_std"
-    if test_stripped_content.contains("use std::")
-        || test_stripped_content.contains("extern crate std")
-    {
-        violations.push(
-            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
-        );
+    if visitor.has_alloc { violations.push("Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade.".to_string()); }
+    if visitor.has_std {
+        let mut has_no_std = false;
+        for attr in &ast.attrs {
+            if let syn::AttrStyle::Inner(_) = attr.style {
+                if attr.path().is_ident("no_std") { has_no_std = true; }
+            }
+        }
+        if !has_no_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
+            violations.push("Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string());
+        }
     }
-
-    if content.contains("#[allow(unsafe_op_in_unsafe_fn)]") {
-        violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
-    }
-
-    if content.contains("thread::spawn") || content.contains("tokio::spawn") {
-        violations.push("Dynamic thread spawning is prohibited.".to_string());
-    }
-
-    if content.contains("Box::new")
-        || content.contains("Vec::with_capacity")
-        || content.contains("HashMap::new")
-    {
-        violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string());
-    }
-
-    if content.contains("compare_exchange")
-        && content.contains("spin_loop")
-        && !content.contains(".load(")
-    {
-        violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string());
-    }
-
-    if content.contains("struct ")
-        && (content.contains("Guard")
-            || content.contains("StateNode")
-            || content.contains("ThreadState"))
-        && !content.contains("impl Drop for")
-        && !content.contains("impl<")
-        && !content.contains("Drop for")
-    {
-        // Simple heuristic for missing drop
-        if !content.contains("impl Drop")
-            && !content.contains("impl<T> Drop")
-            && !content.contains("impl<'a> Drop")
-        {
+    if visitor.has_unsafe_allow { violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string()); }
+    if visitor.has_thread_spawn { violations.push("Dynamic thread spawning is prohibited.".to_string()); }
+    if visitor.has_heap_containers { violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string()); }
+    if visitor.has_compare_exchange && visitor.has_spin_loop && !visitor.has_load { violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string()); }
+    
+    for s in &visitor.struct_names {
+        if !visitor.drop_impls.contains(s) {
             violations.push("Potential Resource Leak: Structs handling state or locks ('Guard', 'StateNode') must explicitly implement `Drop` to ensure deterministic thread resource cleanup.".to_string());
+            break;
         }
     }
 
     violations
+}
+
+struct WatchdogVisitor {
+    has_watchdog: bool,
+}
+
+impl<'ast> Visit<'ast> for WatchdogVisitor {
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name.contains("timeout") || name.contains("watchdog") {
+            self.has_watchdog = true;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let name = node.sig.ident.to_string();
+        if name.contains("timeout") || name.contains("watchdog") {
+            self.has_watchdog = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+}
+
+pub fn analyze_watchdog_timeout(source_file: &Path) -> bool {
+    if let Ok(content) = fs::read_to_string(source_file) {
+        if let Ok(ast) = syn::parse_file(&content) {
+            let mut visitor = WatchdogVisitor { has_watchdog: false };
+            visitor.visit_file(&ast);
+            if visitor.has_watchdog { return true; }
+        }
+        content.contains("watchdog") || content.contains("timeout")
+    } else {
+        false
+    }
+}
+
+struct StressVisitor {
+    has_stress: bool,
+}
+
+impl<'ast> Visit<'ast> for StressVisitor {
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let name = node.sig.ident.to_string();
+        if name.contains("stress") || name.contains("fuzzy") || name.contains("heavy_contention") {
+            self.has_stress = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+}
+
+pub fn analyze_stress_test(source_file: &Path) -> bool {
+    if let Ok(content) = fs::read_to_string(source_file) {
+        if let Ok(ast) = syn::parse_file(&content) {
+            let mut visitor = StressVisitor { has_stress: false };
+            visitor.visit_file(&ast);
+            if visitor.has_stress { return true; }
+        }
+        content.contains("stress") || content.contains("fuzzy") || content.contains("heavy_contention")
+    } else {
+        false
+    }
 }

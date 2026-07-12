@@ -15,6 +15,9 @@ pub struct TargetConfig {
     pub require_cache_padding: Option<bool>,
     pub require_branch_hints: Option<bool>,
     pub require_aerospace_grade: Option<bool>,
+    pub require_watchdog_timeout: Option<bool>,
+    pub require_stress_test: Option<bool>,
+    pub polling_threshold: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
