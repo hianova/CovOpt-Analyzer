@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::hint::black_box;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct SpinMutex {
     state: AtomicUsize,
@@ -13,9 +13,13 @@ impl SpinMutex {
         }
     }
 
-    pub fn lock(&self) -> SpinMutexGuard {
+    pub fn lock(&self) -> SpinMutexGuard<'_> {
         let mut spins = 0;
-        while self.state.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        while self
+            .state
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             spins += 1;
             if spins > 10_000 {
                 // Spin limit exceeded, fallback or log
@@ -75,7 +79,7 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
             "Detected Spin Deadlock or extreme starvation under high contention!"
         );
-        
+
         // This is our target line for O(N) threads
         black_box(n);
     }

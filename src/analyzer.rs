@@ -152,6 +152,7 @@ impl ConvergenceAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn test_perfect_ologn_convergence() {
@@ -162,8 +163,8 @@ mod tests {
         let report = ConvergenceAnalyzer::analyze(&data, Complexity::OLogN);
 
         assert!(report.is_converged, "Should converge to O(logN)");
-        assert_eq!(report.expected, Complexity::OLogN);
-        assert_eq!(report.actual_trend, Complexity::OLogN);
+        assert_matches!(report.expected, Complexity::OLogN);
+        assert_matches!(report.actual_trend, Complexity::OLogN);
         assert!(report.r_squared > 0.95);
     }
 
@@ -175,8 +176,8 @@ mod tests {
         let report = ConvergenceAnalyzer::analyze(&data, Complexity::OLogN);
 
         assert!(!report.is_converged, "Should not converge to O(logN)");
-        assert_eq!(report.expected, Complexity::OLogN);
-        assert_eq!(report.actual_trend, Complexity::ON);
+        assert_matches!(report.expected, Complexity::OLogN);
+        assert_matches!(report.actual_trend, Complexity::ON);
         assert!(report.r_squared < 0.95);
     }
 

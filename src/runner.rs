@@ -242,6 +242,7 @@ impl CargoTestRunner {
             let mut cmd = Command::new("/usr/bin/time");
             cmd.arg("-l").arg(exe);
             cmd.arg(&self.test_name)
+                .arg("--exact")
                 .env("LLVM_PROFILE_FILE", &profraw)
                 .env("COVOPT_N", n.to_string());
 
@@ -272,7 +273,7 @@ impl CargoTestRunner {
                     eprintln!("Test {} failed: {}", exe.display(), stderr);
                 }
             } else {
-                if stdout.contains("1 passed") {
+                if stdout.contains("1 passed") && std::env::var("COVOPT_COMPACT").is_err() {
                     println!("Test ran successfully.");
                 }
             }
@@ -394,6 +395,10 @@ impl CargoTestRunner {
                     || line.starts_with(&format!("\t.size\t{}", symbol))
                 {
                     break;
+                }
+                let tline = line.trim();
+                if tline.starts_with(".loc") || tline.starts_with(".file") {
+                    continue;
                 }
                 block.push_str(line);
                 block.push('\n');

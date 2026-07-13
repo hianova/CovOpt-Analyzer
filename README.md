@@ -9,7 +9,29 @@ Instead of relying on fragile execution time measurements (like `criterion` or `
 - **Zero-Invasive**: No macros, no timers, no changes required to your production code.
 - **Noise-Free Precision**: Immune to CPU caches, OS scheduling, and background processes. Measures exact code-path hits.
 - **Mathematical Convergence Engine**: Automatically calculates Least Squares regression and $R^2$ values to confidently match execution data against Big-O theoretical curves.
+- **Robust AST-Based Static Analysis**: Replaces fragile string-matching with full `syn` AST parsing to enforce strict Aerospace Grade standards, verifying `#![no_std]`, memory allocation, cache padding, and accurate thread lifecycles.
+- **Hardening Toolkit**: Built-in support for advanced security testing:
+  - **Mutation Testing** (`covopt mutate`): Integrates with `cargo-mutants`.
+  - **Fuzzing** (`covopt fuzz`): Integrates with `cargo-fuzz`.
+  - **Sanitizers** (`covopt sanitize`): Detects Use-After-Free and data races via LLVM Address/Thread Sanitizers (`-Zsanitizer`).
 - **Automated Stress Testing**: Automatically instruments your binaries, injects `COVOPT_N` environment variables, generates `.profraw` data, merges them, and exports LLVM JSON profiles.
+- **LLM-Powered Auto-Fix** (`covopt sanitize --auto-fix`): Connects with Gemini or local LLM servers (Ollama/LM Studio) to automatically patch safety leaks caught by sanitizers.
+
+---
+
+## Recommended Workflows: Humans vs. AI Agents 👥🤖
+
+Depending on whether you are running `covopt` manually in a terminal, or configuring it for an autonomous coding agent (like Google Antigravity), we recommend two distinct workflow pipelines:
+
+### 🧑 For Humans (Interactive Development)
+- **Harden & Secure (`covopt fuzz` / `covopt mutate`)**: Interactively fuzz your functions or inject mutations to find loopholes in test assertions.
+- **Visualize Hotspots (`covopt profile --tool flamegraph`)**: Profile your CPU hotspots and analyze lock contention using interactive flamegraphs.
+- **Memory Fix (`covopt sanitize --auto-fix`)**: Enable local LLM feedback loops to automatically suggest patches for Use-After-Free or data races.
+
+### 🤖 For AI Agents (Automated Pipelines & CI)
+- **Clutter-Free Checks (`covopt audit`)**: Runs all checks defined in `.covopt.toml` compactly. Suppresses noisy cargo build logs and intermediate test execution lines to keep agent context clean. Only reports anomalies or entropy threshold violations.
+- **CPU Optimization (`covopt profile`)**: Automatically parses the generated `flamegraph.svg` into clean, text-based CPU hotspots and statistics, serving as direct actionable input for AI agents to locate and optimize hot paths without needing a browser visualizer.
+- **Self-Healing Loop (`covopt sanitize --auto-fix`)**: Hook `covopt` with the agent's LLM environment. If the sanitizer catches a crash, the CLI automatically feeds the crash logs and offending source lines back to the LLM to auto-repair, compiling up to 3 times to guarantee memory safety.
 
 ---
 

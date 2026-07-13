@@ -20,7 +20,20 @@ use runner::CargoTestRunner;
 
 #[derive(Parser, Debug)]
 #[command(name = "covopt")]
-#[command(author, version, about = "Coverage-based Complexity Analyzer", long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Coverage-based Complexity & Safety Analyzer",
+    long_about = "RECOMMENDED WORKFLOWS:\n\n\
+  🧑 [FOR HUMANS]\n\
+    - fuzz / mutate      : Harden your test coverage manually.\n\
+    - profile            : Diagnose CPU bottlenecks and visualize with flamegraphs in the browser.\n\
+    - sanitize --auto-fix: Interactively catch and repair Use-After-Free/Data Races using LLMs.\n\n\
+  🤖 [FOR AI AGENTS]\n\
+    - audit              : Fast, low-entropy verification checking with quiet checklist output.\n\
+    - profile            : Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.\n\
+    - sanitize --auto-fix: Automate self-healing ReAct compilation loops to auto-patch memory bugs."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -78,6 +91,10 @@ struct SanitizeArgs {
 
     #[arg(long, default_value = "address")]
     san_type: String, // address or thread
+
+    /// Automatically repair memory safety crashes using LLM
+    #[arg(long, default_value_t = false)]
+    auto_fix: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -159,7 +176,34 @@ fn parse_complexity(s: &str) -> Complexity {
     }
 }
 
-fn run_analysis(args: &RunArgs) -> bool {
+struct LogBuffer {
+    buffer: String,
+    compact: bool,
+}
+
+impl LogBuffer {
+    fn new(compact: bool) -> Self {
+        Self {
+            buffer: String::new(),
+            compact,
+        }
+    }
+}
+
+macro_rules! wlog {
+    ($log:expr, $($arg:tt)*) => {{
+        let s = format!($($arg)*);
+        if !$log.compact {
+            println!("{}", s);
+        }
+        $log.buffer.push_str(&s);
+        $log.buffer.push('\n');
+    }};
+}
+
+fn run_analysis(args: &RunArgs, compact: bool) -> bool {
+    let mut log = LogBuffer::new(compact);
+
     let test_name = args.test.as_ref().expect("--test is required");
     let expected_str = args.expected.as_ref().expect("--expected is required");
     let n_values_str = args.n_values.as_ref().expect("--n-values is required");
@@ -180,34 +224,40 @@ fn run_analysis(args: &RunArgs) -> bool {
     let output_dir = dir.path().to_path_buf();
     let runner = CargoTestRunner::new(test_name, &output_dir);
 
-    println!("Starting CovOpt Analysis for test '{}'...", test_name);
-    println!("Target: {}:{}", target_file, target_line);
-    println!("Expected Complexity: {:?}", expected);
+    wlog!(log, "Starting CovOpt Analysis for test '{}'...", test_name);
+    wlog!(log, "Target: {}:{}", target_file, target_line);
+    wlog!(log, "Expected Complexity: {:?}", expected);
 
     let mut data = Vec::new();
     let mut space_data = Vec::new();
     let mut target_symbol: Option<String> = None;
     let mut target_coverage_rate = None;
+    let mut mca_stats = None;
 
     for n_str in args.n_values.as_ref().unwrap().split(',') {
         let n: u64 = n_str.trim().parse().expect("Invalid N value");
-        println!("---------------------------------------------------");
-        println!("Running for N = {}...", n);
+        wlog!(log, "---------------------------------------------------");
+        wlog!(log, "Running for N = {}...", n);
 
         let (map, peak_rss) = match runner.run(n as usize, None) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Failed to run coverage for N={}: {}", n, e);
+                wlog!(log, "[ERROR] Failed to run coverage for N={}: {}", n, e);
+                if compact {
+                    println!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+                    println!("{}", log.buffer);
+                    println!("========================================\n");
+                }
                 return false;
             }
         };
 
         let hit_count = map.find_hit_count(target_file, target_line);
         if let Some(h) = hit_count {
-            println!("  -> Hit count = {} | Peak RSS = {} bytes", h, peak_rss);
+            wlog!(log, "  -> Hit count = {} | Peak RSS = {} bytes", h, peak_rss);
             data.push((n as usize, h));
         } else {
-            eprintln!("  -> WARNING: No hit count found for target file/line. Assuming 0.");
+            wlog!(log, "  -> WARNING: No hit count found for target file/line. Assuming 0.");
             data.push((n as usize, 0));
         }
         space_data.push((n as usize, peak_rss));
@@ -220,140 +270,129 @@ fn run_analysis(args: &RunArgs) -> bool {
         }
     }
 
-    println!("---------------------------------------------------");
-    println!("Time Analysis Results:");
+    wlog!(log, "---------------------------------------------------");
+    wlog!(log, "Time Analysis Results:");
     let report = ConvergenceAnalyzer::analyze(&data, expected);
-    println!("{:#?}", report);
+    wlog!(log, "{:#?}", report);
 
-    println!("---------------------------------------------------");
-    println!("Space Analysis Results (Dynamic Memory):");
+    wlog!(log, "---------------------------------------------------");
+    wlog!(log, "Space Analysis Results (Dynamic Memory):");
     let space_report = ConvergenceAnalyzer::analyze(&space_data, Complexity::O1);
-    println!(
-        "  -> Actual Space Complexity: {:?}",
-        space_report.actual_trend
-    );
+    wlog!(log, "  -> Actual Space Complexity: {:?}", space_report.actual_trend);
 
     if args.formalize {
-        println!("---------------------------------------------------");
-        println!(
-            "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof..."
-        );
+        wlog!(log, "---------------------------------------------------");
+        wlog!(log, "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof...");
         let exact_formula = heuristic::SymbolicRegressor::formalize(&data);
-        println!("  => Formal Proof Discovered: {}", exact_formula);
+        wlog!(log, "  => Formal Proof Discovered: {}", exact_formula);
     }
 
     let var_count = static_analysis::analyze_variables(
         std::path::Path::new(&target_file),
         target_line as usize,
     );
-    println!("Static Variable Declarations: {}", var_count);
+    wlog!(log, "Static Variable Declarations: {}", var_count);
 
     let thread_activities =
         static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
     if !thread_activities.is_empty() {
-        println!("Static Thread Activities:");
+        wlog!(log, "Static Thread Activities:");
         for act in thread_activities {
-            println!("  - {}", act);
+            wlog!(log, "  - {}", act);
         }
     } else {
-        println!("Static Thread Activities: None");
+        wlog!(log, "Static Thread Activities: None");
     }
 
     let mut success = true;
 
     if report.is_converged && report.actual_trend > expected {
-        eprintln!(
-            "\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}",
-            expected, report.actual_trend
-        );
+        wlog!(log, "\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}", expected, report.actual_trend);
         success = false;
     }
 
+    let mut static_cache_padding = None;
     if args.require_cache_padding {
         let has_padding =
             static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
+        static_cache_padding = Some(has_padding);
         if has_padding {
-            println!("Static Cache Padding: Detected");
+            wlog!(log, "Static Cache Padding: Detected");
         } else {
-            eprintln!(
-                "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target."
-            );
+            wlog!(log, "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target.");
             success = false;
         }
     }
 
+    let mut static_branch_hints = None;
     if args.require_branch_hints {
         let has_hints = static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
+        static_branch_hints = Some(has_hints);
         if has_hints {
-            println!("Static Branch Hints: Detected");
+            wlog!(log, "Static Branch Hints: Detected");
         } else {
-            eprintln!(
-                "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target."
-            );
+            wlog!(log, "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target.");
             success = false;
         }
     }
 
+    let mut static_aerospace_grade = None;
     if args.require_aerospace_grade {
         let violations =
             static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
+        static_aerospace_grade = Some(violations.clone());
         if violations.is_empty() {
-            println!("Static Aerospace Grade: Passed");
+            wlog!(log, "Static Aerospace Grade: Passed");
         } else {
-            eprintln!(
-                "\n[ERROR] Aerospace Grade Violations Detected in {}!",
-                target_file
-            );
+            wlog!(log, "\n[ERROR] Aerospace Grade Violations Detected in {}!", target_file);
             for v in violations {
-                eprintln!("  - {}", v);
+                wlog!(log, "  - {}", v);
             }
             success = false;
         }
     }
 
+    let mut static_watchdog_timeout = None;
     if args.require_watchdog_timeout {
-        let has_watchdog = static_analysis::analyze_watchdog_timeout(std::path::Path::new(&target_file));
+        let has_watchdog =
+            static_analysis::analyze_watchdog_timeout(std::path::Path::new(&target_file));
+        static_watchdog_timeout = Some(has_watchdog);
         if has_watchdog {
-            println!("Static Watchdog Timeout: Detected");
+            wlog!(log, "Static Watchdog Timeout: Detected");
         } else {
-            eprintln!(
-                "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks."
-            );
+            wlog!(log, "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks.");
             success = false;
         }
     }
 
+    let mut static_stress_test = None;
     if args.require_stress_test {
         let has_stress = static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
+        static_stress_test = Some(has_stress);
         if has_stress {
-            println!("Static Stress Test: Detected");
+            wlog!(log, "Static Stress Test: Detected");
         } else {
-            eprintln!(
-                "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic."
-            );
+            wlog!(log, "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic.");
             success = false;
         }
     }
 
-    println!("---------------------------------------------------");
+    let mut coverage_rate_val = None;
+    wlog!(log, "---------------------------------------------------");
     if let Some(symbol) = target_symbol {
         if let Some((executed, total)) = target_coverage_rate {
             let rate = (executed as f64 / total as f64) * 100.0;
-            println!(
-                "Coverage Rate (Target Function): {:.1}% ({}/{} lines)",
-                rate, executed, total
-            );
+            coverage_rate_val = Some(rate);
+            wlog!(log, "Coverage Rate (Target Function): {:.1}% ({}/{} lines)", rate, executed, total);
             if rate < 90.0 {
-                println!(
-                    "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test."
-                );
+                wlog!(log, "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test.");
                 success = false; // Fail audit if coverage is below 90%
             }
-            println!("---------------------------------------------------");
+            wlog!(log, "---------------------------------------------------");
         }
 
-        println!("Target Symbol Found: {}", symbol);
-        println!("Extracting ASM and running LLVM-MCA analysis...");
+        wlog!(log, "Target Symbol Found: {}", symbol);
+        wlog!(log, "Extracting ASM and running LLVM-MCA analysis...");
 
         match runner.compile_asm() {
             Ok(asm_content) => {
@@ -388,18 +427,12 @@ fn run_analysis(args: &RunArgs) -> bool {
                             .trim()
                             .trim_start_matches(['<', '[']);
 
-                        println!(
-                            "  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...",
-                            struct_name, fn_name
-                        );
+                        wlog!(log, "  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...", struct_name, fn_name);
                         asm_block_opt = runner
                             .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
                     }
                     if asm_block_opt.is_none() {
-                        println!(
-                            "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...",
-                            test_name
-                        );
+                        wlog!(log, "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...", test_name);
                         asm_block_opt =
                             runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
                     }
@@ -407,30 +440,29 @@ fn run_analysis(args: &RunArgs) -> bool {
 
                 if let Some(asm_block) = asm_block_opt {
                     let mem_profile = static_analysis::analyze_memory_ops(&asm_block);
-                    println!("\n[Static Memory Operations]");
-                    println!("Loads:  {}", mem_profile.loads);
-                    println!("Stores: {}", mem_profile.stores);
-                    println!("Allocs: {}", mem_profile.allocs);
+                    wlog!(log, "\n[Static Memory Operations]");
+                    wlog!(log, "Loads:  {}", mem_profile.loads);
+                    wlog!(log, "Stores: {}", mem_profile.stores);
+                    wlog!(log, "Allocs: {}", mem_profile.allocs);
 
                     let mca_runner = McaRunner::new(args.mca_cpu.clone());
                     match mca_runner.run(&asm_block) {
                         Ok(mca_report) => {
-                            println!("\n[MCA Report]");
-                            println!("Block RThroughput: {:.2}", mca_report.block_rthroughput);
-                            println!("IPC:               {:.2}", mca_report.ipc);
+                            wlog!(log, "\n[MCA Report]");
+                            wlog!(log, "Block RThroughput: {:.2}", mca_report.block_rthroughput);
+                            wlog!(log, "IPC:               {:.2}", mca_report.ipc);
+                            mca_stats = Some((mca_report.ipc, mca_report.block_rthroughput));
                         }
-                        Err(e) => eprintln!("LLVM-MCA failed: {}", e),
+                        Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
                     }
                 } else {
-                    eprintln!(
-                        "Could not extract ASM block for symbol. The function might be inlined in release mode."
-                    );
+                    wlog!(log, "Could not extract ASM block for symbol. The function might be inlined in release mode.");
                 }
             }
-            Err(e) => eprintln!("ASM compilation failed: {}", e),
+            Err(e) => wlog!(log, "ASM compilation failed: {}", e),
         }
     } else {
-        println!("Could not extract target symbol name from coverage data. Skipping MCA analysis.");
+        wlog!(log, "Could not extract target symbol name from coverage data. Skipping MCA analysis.");
     }
 
     // --- Energy / Thermal Guidance (High Frequency Polling Detection) ---
@@ -439,17 +471,53 @@ fn run_analysis(args: &RunArgs) -> bool {
     let threshold = args.polling_threshold.unwrap_or(50_000);
 
     if max_hit_count > threshold && max_hit_count > (max_n as u64) * 100 {
-        println!("\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <");
-        println!(
-            "Detected astronomically high hit count ({}) relative to workload (N={}).",
-            max_hit_count, max_n
-        );
-        println!(
-            "This indicates 'High-Frequency Invalid Polling' (Busy-waiting) in a loop, which will cause 100% single-core CPU usage and severe device overheating."
-        );
-        println!(
-            "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch."
-        );
+        wlog!(log, "\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <");
+        wlog!(log, "Detected astronomically high hit count ({}) relative to workload (N={}).", max_hit_count, max_n);
+        wlog!(log, "This indicates 'High-Frequency Invalid Polling' (Busy-waiting) in a loop, which will cause 100% single-core CPU usage and severe device overheating.");
+        wlog!(log, "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch.");
+    }
+
+    if success {
+        if compact {
+            println!("\n> [x] CovOpt Analysis PASSED (Target: {})", target_file);
+            println!("  - Time Complexity: {:?} (Expected: {:?})", report.actual_trend, expected);
+            println!("  - Space Complexity: {:?}", space_report.actual_trend);
+            
+            let mut checks = Vec::new();
+            if args.require_cache_padding {
+                checks.push(format!("Cache Padding: {}", if static_cache_padding.unwrap_or(false) { "Yes" } else { "No" }));
+            }
+            if args.require_branch_hints {
+                checks.push(format!("Branch Hints: {}", if static_branch_hints.unwrap_or(false) { "Yes" } else { "No" }));
+            }
+            if args.require_aerospace_grade {
+                checks.push(format!("Aerospace: {}", if static_aerospace_grade.as_ref().map_or(true, |v| v.is_empty()) { "Passed" } else { "Failed" }));
+            }
+            if args.require_watchdog_timeout {
+                checks.push(format!("Watchdog: {}", if static_watchdog_timeout.unwrap_or(false) { "Yes" } else { "No" }));
+            }
+            if args.require_stress_test {
+                checks.push(format!("Stress Test: {}", if static_stress_test.unwrap_or(false) { "Yes" } else { "No" }));
+            }
+            if !checks.is_empty() {
+                println!("  - Static Checks: {}", checks.join(", "));
+            } else {
+                println!("  - Static Checks: None Required");
+            }
+            
+            if let Some(rate) = coverage_rate_val {
+                println!("  - Function Coverage: {:.1}%", rate);
+            }
+            if let Some((ipc, rt)) = mca_stats {
+                println!("  - LLVM-MCA: IPC {:.2}, RThroughput {:.2}", ipc, rt);
+            }
+        }
+    } else {
+        if compact {
+            println!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+            println!("{}", log.buffer);
+            println!("========================================\n");
+        }
     }
 
     success
@@ -576,6 +644,7 @@ fn run_fix() {
 }
 
 fn run_audit() {
+    unsafe { std::env::set_var("COVOPT_COMPACT", "1"); }
     let config_path = ".covopt.toml";
     if !PathBuf::from(config_path).exists() {
         eprintln!("Config file {} not found.", config_path);
@@ -610,12 +679,12 @@ fn run_audit() {
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
         println!("===================================================");
-        if !run_analysis(&args) {
+        if !run_analysis(&args, true) {
             all_success = false;
         }
 
         // --- COVOPT 2.0 ENTROPY EVALUATION ---
-        let entropy_result = entropy::calculate_entropy_score(&target);
+        let entropy_result = entropy::calculate_entropy_score(&target, true);
         println!("\n=== COVOPT 2.0 ENTROPY REPORT ===");
         println!(
             "  A. Fuzz-Cov Variance: {:.1}/30.0",
@@ -766,7 +835,7 @@ fn main() {
             }
         }
         Some(Commands::Sanitize(args)) => {
-            if !harden::run_sanitizer(&args.test, &args.san_type) {
+            if !harden::run_sanitizer(&args.test, &args.san_type, args.auto_fix) {
                 std::process::exit(1);
             }
         }
@@ -776,14 +845,14 @@ fn main() {
             }
         }
         Some(Commands::Run(args)) => {
-            if !run_analysis(&args) {
+            if !run_analysis(&args, false) {
                 std::process::exit(1);
             }
         }
         None => {
             // Default to legacy run mode if flags are provided
             if cli.run_args.test.is_some() {
-                if !run_analysis(&cli.run_args) {
+                if !run_analysis(&cli.run_args, false) {
                     std::process::exit(1);
                 }
             } else {

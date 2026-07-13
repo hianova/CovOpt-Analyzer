@@ -20,6 +20,7 @@ impl McaRunner {
 
     pub fn run(&self, asm_block: &str) -> Result<McaReport, String> {
         let mut cmd = Command::new("llvm-mca");
+        cmd.arg("--skip-unsupported-instructions=any");
 
         if let Some(cpu) = &self.cpu {
             cmd.arg(format!("-mcpu={}", cpu));

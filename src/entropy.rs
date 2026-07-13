@@ -1,6 +1,7 @@
 use crate::config::TargetConfig;
 use crate::runner::CargoTestRunner;
 use std::process::Command;
+use std::fmt::Write;
 
 pub struct EntropyResult {
     pub fuzz_variance_score: f64, // 0 - 30
@@ -9,13 +10,19 @@ pub struct EntropyResult {
     pub total_score: f64,         // 0 - 100
 }
 
-pub fn calculate_entropy_score(config: &TargetConfig) -> EntropyResult {
-    println!("\n[Entropy Analyzer] Starting Evaluation...");
-    let cli_noise = compute_cli_noise();
-    let fuzz_variance = compute_fuzz_variance(config);
-    let branch_sprawl = compute_branch_sprawl(config);
+pub fn calculate_entropy_score(config: &TargetConfig, compact: bool) -> EntropyResult {
+    let mut details = String::new();
+    let _ = writeln!(details, "\n[Entropy Analyzer] Starting Evaluation...");
+    let cli_noise = compute_cli_noise(&mut details);
+    let fuzz_variance = compute_fuzz_variance(config, &mut details);
+    let branch_sprawl = compute_branch_sprawl(config, &mut details);
 
     let total = fuzz_variance + branch_sprawl + cli_noise;
+
+    if !compact || total > 50.0 {
+        print!("{}", details);
+    }
+
     EntropyResult {
         fuzz_variance_score: fuzz_variance,
         branch_sprawl_score: branch_sprawl,
@@ -24,8 +31,8 @@ pub fn calculate_entropy_score(config: &TargetConfig) -> EntropyResult {
     }
 }
 
-fn compute_cli_noise() -> f64 {
-    println!("  -> Calculating CLI Noise Index (C)...");
+fn compute_cli_noise(details: &mut String) -> f64 {
+    let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
     let output = Command::new("cargo")
         .args(["check", "--message-format=json"])
         .output()
@@ -49,15 +56,16 @@ fn compute_cli_noise() -> f64 {
 
     // Each warning adds 2 points to entropy, up to 30.
     let score = (warning_count as f64 * 2.0).min(30.0);
-    println!(
+    let _ = writeln!(
+        details,
         "     Found {} warnings. CLI Noise Score: {:.1}/30.0",
         warning_count, score
     );
     score
 }
 
-fn compute_fuzz_variance(config: &TargetConfig) -> f64 {
-    println!("  -> Calculating Fuzz-Cov Variance (A)...");
+fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
+    let _ = writeln!(details, "  -> Calculating Fuzz-Cov Variance (A)...");
     let iterations = config.fuzz_iterations.unwrap_or(10);
     let mut hit_counts = Vec::new();
     let n_value = 100; // Use a fixed N for fuzzing loops
@@ -78,7 +86,7 @@ fn compute_fuzz_variance(config: &TargetConfig) -> f64 {
     }
 
     if hit_counts.is_empty() {
-        println!("     Could not gather Fuzz-Cov data. Defaulting to 15.0");
+        let _ = writeln!(details, "     Could not gather Fuzz-Cov data. Defaulting to 15.0");
         return 15.0;
     }
 
@@ -97,20 +105,22 @@ fn compute_fuzz_variance(config: &TargetConfig) -> f64 {
 
     // CV > 0.5 means highly unstable -> score 30
     let score = (cv * 60.0).min(30.0);
-    println!(
+    let _ = writeln!(
+        details,
         "     Fuzz Variance (StdDev: {:.1}, Mean: {:.1}, CV: {:.2}). Score: {:.1}/30.0",
         std_dev, mean, cv, score
     );
     score
 }
 
-fn compute_branch_sprawl(config: &TargetConfig) -> f64 {
-    println!("  -> Calculating API Branch Sprawl (B)...");
+fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
+    let _ = writeln!(details, "  -> Calculating API Branch Sprawl (B)...");
 
     let tests_str = match &config.tests {
         Some(t) => t,
         None => {
-            println!(
+            let _ = writeln!(
+                details,
                 "     No `tests` field provided for multi-scenario. Defaulting to 0 branch sprawl."
             );
             return 0.0;
@@ -119,7 +129,7 @@ fn compute_branch_sprawl(config: &TargetConfig) -> f64 {
 
     let test_cases: Vec<&str> = tests_str.split(',').map(|s| s.trim()).collect();
     if test_cases.len() < 2 {
-        println!("     Need at least 2 tests to measure branch sprawl. Defaulting to 0.");
+        let _ = writeln!(details, "     Need at least 2 tests to measure branch sprawl. Defaulting to 0.");
         return 0.0;
     }
 
@@ -169,7 +179,8 @@ fn compute_branch_sprawl(config: &TargetConfig) -> f64 {
     };
     // ratio 1.0 -> score 0. ratio 0.0 -> score 40.
     let score = (1.0 - ratio) * 40.0;
-    println!(
+    let _ = writeln!(
+        details,
         "     Branch Sprawl (Intersection: {}, Union: {}, Ratio: {:.2}). Score: {:.1}/40.0",
         intersection_count, union_count, ratio, score
     );
