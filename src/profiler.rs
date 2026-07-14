@@ -1,11 +1,17 @@
 use std::process::Command;
 
-pub fn run_profile(test_name: &str, tool: &str) -> bool {
-    println!("Starting profiler '{}' for test '{}'...", tool, test_name);
+pub fn run_profile(test_name: Option<&str>, bin_name: Option<&str>, tool: &str) -> bool {
+    if test_name.is_none() && bin_name.is_none() {
+        eprintln!("[ERROR] You must specify either --test <TEST> or --bin <BIN>.");
+        return false;
+    }
+
+    let target_name = test_name.unwrap_or_else(|| bin_name.unwrap_or("unknown"));
+    println!("Starting profiler '{}' for target '{}'...", tool, target_name);
 
     match tool.to_lowercase().as_str() {
-        "flamegraph" => run_flamegraph(test_name),
-        "samply" => run_samply(test_name),
+        "flamegraph" => run_flamegraph(test_name, bin_name),
+        "samply" => run_samply(test_name, bin_name),
         _ => {
             eprintln!(
                 "[ERROR] Unknown profiling tool '{}'. Supported tools are 'flamegraph' and 'samply'.",
@@ -28,19 +34,24 @@ fn check_command_exists(cmd: &str, install_hint: &str) -> bool {
     }
 }
 
-fn run_flamegraph(test_name: &str) -> bool {
+fn run_flamegraph(test_name: Option<&str>, bin_name: Option<&str>) -> bool {
     // Check if cargo-flamegraph is installed
     if !check_command_exists("cargo-flamegraph", "cargo install cargo-flamegraph") {
         return false;
     }
 
-    println!("Running: cargo flamegraph --test {}", test_name);
+    let mut child = Command::new("cargo");
+    child.arg("flamegraph");
 
-    let mut child = Command::new("cargo")
-        .arg("flamegraph")
-        .arg("--test")
-        .arg(test_name)
-        .spawn()
+    if let Some(t) = test_name {
+        println!("Running: cargo flamegraph --test {}", t);
+        child.arg("--test").arg(t);
+    } else if let Some(b) = bin_name {
+        println!("Running: cargo flamegraph --bin {}", b);
+        child.arg("--bin").arg(b);
+    }
+
+    let mut child = child.spawn()
         .expect("Failed to start cargo flamegraph");
 
     let status = child.wait().expect("Failed to wait for cargo flamegraph");
@@ -113,25 +124,24 @@ fn parse_and_print_svg_bottlenecks() {
     println!("---------------------------------------------------");
 }
 
-fn run_samply(test_name: &str) -> bool {
+fn run_samply(test_name: Option<&str>, bin_name: Option<&str>) -> bool {
     // Check if samply is installed
     if !check_command_exists("samply", "cargo install samply") {
         return false;
     }
 
-    println!(
-        "Running: samply record cargo test --test {} --release",
-        test_name
-    );
+    let mut child = Command::new("samply");
+    child.arg("record").arg("cargo");
 
-    let mut child = Command::new("samply")
-        .arg("record")
-        .arg("cargo")
-        .arg("test")
-        .arg("--test")
-        .arg(test_name)
-        .arg("--release")
-        .spawn()
+    if let Some(t) = test_name {
+        println!("Running: samply record cargo test --test {} --release", t);
+        child.arg("test").arg("--test").arg(t).arg("--release");
+    } else if let Some(b) = bin_name {
+        println!("Running: samply record cargo run --bin {} --release", b);
+        child.arg("run").arg("--bin").arg(b).arg("--release");
+    }
+
+    let mut child = child.spawn()
         .expect("Failed to start samply");
 
     let status = child.wait().expect("Failed to wait for samply");

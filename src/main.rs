@@ -100,8 +100,12 @@ struct SanitizeArgs {
 #[derive(clap::Args, Debug, Clone)]
 struct ProfileArgs {
     /// The name of the test to profile
-    #[arg(short, long)]
-    test: String,
+    #[arg(long)]
+    test: Option<String>,
+
+    /// The name of the binary to profile
+    #[arg(long)]
+    bin: Option<String>,
 
     /// Profiling tool to use: flamegraph (default) or samply
     #[arg(long, default_value = "flamegraph")]
@@ -958,7 +962,7 @@ fn main() {
             }
         }
         Some(Commands::Profile(args)) => {
-            if !profiler::run_profile(&args.test, &args.tool) {
+            if !profiler::run_profile(args.test.as_deref(), args.bin.as_deref(), &args.tool) {
                 std::process::exit(1);
             }
         }
