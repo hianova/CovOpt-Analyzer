@@ -1,7 +1,7 @@
 use crate::config::TargetConfig;
 use crate::runner::CargoTestRunner;
-use std::process::Command;
 use std::fmt::Write;
+use std::process::Command;
 
 pub struct EntropyResult {
     pub fuzz_variance_score: f64, // 0 - 30
@@ -86,7 +86,10 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     }
 
     if hit_counts.is_empty() {
-        let _ = writeln!(details, "     Could not gather Fuzz-Cov data. Defaulting to 15.0");
+        let _ = writeln!(
+            details,
+            "     Could not gather Fuzz-Cov data. Defaulting to 15.0"
+        );
         return 15.0;
     }
 
@@ -129,7 +132,10 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
 
     let test_cases: Vec<&str> = tests_str.split(',').map(|s| s.trim()).collect();
     if test_cases.len() < 2 {
-        let _ = writeln!(details, "     Need at least 2 tests to measure branch sprawl. Defaulting to 0.");
+        let _ = writeln!(
+            details,
+            "     Need at least 2 tests to measure branch sprawl. Defaulting to 0."
+        );
         return 0.0;
     }
 

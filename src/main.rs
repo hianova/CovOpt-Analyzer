@@ -254,10 +254,18 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
 
         let hit_count = map.find_hit_count(target_file, target_line);
         if let Some(h) = hit_count {
-            wlog!(log, "  -> Hit count = {} | Peak RSS = {} bytes", h, peak_rss);
+            wlog!(
+                log,
+                "  -> Hit count = {} | Peak RSS = {} bytes",
+                h,
+                peak_rss
+            );
             data.push((n as usize, h));
         } else {
-            wlog!(log, "  -> WARNING: No hit count found for target file/line. Assuming 0.");
+            wlog!(
+                log,
+                "  -> WARNING: No hit count found for target file/line. Assuming 0."
+            );
             data.push((n as usize, 0));
         }
         space_data.push((n as usize, peak_rss));
@@ -278,11 +286,18 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     wlog!(log, "---------------------------------------------------");
     wlog!(log, "Space Analysis Results (Dynamic Memory):");
     let space_report = ConvergenceAnalyzer::analyze(&space_data, Complexity::O1);
-    wlog!(log, "  -> Actual Space Complexity: {:?}", space_report.actual_trend);
+    wlog!(
+        log,
+        "  -> Actual Space Complexity: {:?}",
+        space_report.actual_trend
+    );
 
     if args.formalize {
         wlog!(log, "---------------------------------------------------");
-        wlog!(log, "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof...");
+        wlog!(
+            log,
+            "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof..."
+        );
         let exact_formula = heuristic::SymbolicRegressor::formalize(&data);
         wlog!(log, "  => Formal Proof Discovered: {}", exact_formula);
     }
@@ -307,7 +322,12 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let mut success = true;
 
     if report.is_converged && report.actual_trend > expected {
-        wlog!(log, "\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}", expected, report.actual_trend);
+        wlog!(
+            log,
+            "\n[ERROR] Algorithm complexity degraded! Expected {:?}, got {:?}",
+            expected,
+            report.actual_trend
+        );
         success = false;
     }
 
@@ -319,7 +339,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if has_padding {
             wlog!(log, "Static Cache Padding: Detected");
         } else {
-            wlog!(log, "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target.");
+            wlog!(
+                log,
+                "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target."
+            );
             success = false;
         }
     }
@@ -331,7 +354,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if has_hints {
             wlog!(log, "Static Branch Hints: Detected");
         } else {
-            wlog!(log, "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target.");
+            wlog!(
+                log,
+                "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target."
+            );
             success = false;
         }
     }
@@ -344,7 +370,11 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if violations.is_empty() {
             wlog!(log, "Static Aerospace Grade: Passed");
         } else {
-            wlog!(log, "\n[ERROR] Aerospace Grade Violations Detected in {}!", target_file);
+            wlog!(
+                log,
+                "\n[ERROR] Aerospace Grade Violations Detected in {}!",
+                target_file
+            );
             for v in violations {
                 wlog!(log, "  - {}", v);
             }
@@ -360,7 +390,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if has_watchdog {
             wlog!(log, "Static Watchdog Timeout: Detected");
         } else {
-            wlog!(log, "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks.");
+            wlog!(
+                log,
+                "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks."
+            );
             success = false;
         }
     }
@@ -372,7 +405,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if has_stress {
             wlog!(log, "Static Stress Test: Detected");
         } else {
-            wlog!(log, "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic.");
+            wlog!(
+                log,
+                "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic."
+            );
             success = false;
         }
     }
@@ -383,9 +419,18 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         if let Some((executed, total)) = target_coverage_rate {
             let rate = (executed as f64 / total as f64) * 100.0;
             coverage_rate_val = Some(rate);
-            wlog!(log, "Coverage Rate (Target Function): {:.1}% ({}/{} lines)", rate, executed, total);
+            wlog!(
+                log,
+                "Coverage Rate (Target Function): {:.1}% ({}/{} lines)",
+                rate,
+                executed,
+                total
+            );
             if rate < 90.0 {
-                wlog!(log, "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test.");
+                wlog!(
+                    log,
+                    "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test."
+                );
                 success = false; // Fail audit if coverage is below 90%
             }
             wlog!(log, "---------------------------------------------------");
@@ -427,12 +472,21 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                             .trim()
                             .trim_start_matches(['<', '[']);
 
-                        wlog!(log, "  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...", struct_name, fn_name);
+                        wlog!(
+                            log,
+                            "  -> Target symbol exact match failed. Searching by keywords: '{}', '{}'...",
+                            struct_name,
+                            fn_name
+                        );
                         asm_block_opt = runner
                             .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
                     }
                     if asm_block_opt.is_none() {
-                        wlog!(log, "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...", test_name);
+                        wlog!(
+                            log,
+                            "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...",
+                            test_name
+                        );
                         asm_block_opt =
                             runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
                     }
@@ -449,20 +503,30 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                     match mca_runner.run(&asm_block) {
                         Ok(mca_report) => {
                             wlog!(log, "\n[MCA Report]");
-                            wlog!(log, "Block RThroughput: {:.2}", mca_report.block_rthroughput);
+                            wlog!(
+                                log,
+                                "Block RThroughput: {:.2}",
+                                mca_report.block_rthroughput
+                            );
                             wlog!(log, "IPC:               {:.2}", mca_report.ipc);
                             mca_stats = Some((mca_report.ipc, mca_report.block_rthroughput));
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
                     }
                 } else {
-                    wlog!(log, "Could not extract ASM block for symbol. The function might be inlined in release mode.");
+                    wlog!(
+                        log,
+                        "Could not extract ASM block for symbol. The function might be inlined in release mode."
+                    );
                 }
             }
             Err(e) => wlog!(log, "ASM compilation failed: {}", e),
         }
     } else {
-        wlog!(log, "Could not extract target symbol name from coverage data. Skipping MCA analysis.");
+        wlog!(
+            log,
+            "Could not extract target symbol name from coverage data. Skipping MCA analysis."
+        );
     }
 
     // --- Energy / Thermal Guidance (High Frequency Polling Detection) ---
@@ -471,40 +535,92 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let threshold = args.polling_threshold.unwrap_or(50_000);
 
     if max_hit_count > threshold && max_hit_count > (max_n as u64) * 100 {
-        wlog!(log, "\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <");
-        wlog!(log, "Detected astronomically high hit count ({}) relative to workload (N={}).", max_hit_count, max_n);
-        wlog!(log, "This indicates 'High-Frequency Invalid Polling' (Busy-waiting) in a loop, which will cause 100% single-core CPU usage and severe device overheating.");
-        wlog!(log, "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch.");
+        wlog!(
+            log,
+            "\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <"
+        );
+        wlog!(
+            log,
+            "Detected astronomically high hit count ({}) relative to workload (N={}).",
+            max_hit_count,
+            max_n
+        );
+        wlog!(
+            log,
+            "This indicates 'High-Frequency Invalid Polling' (Busy-waiting) in a loop, which will cause 100% single-core CPU usage and severe device overheating."
+        );
+        wlog!(
+            log,
+            "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch."
+        );
     }
 
     if success {
         if compact {
             println!("\n> [x] CovOpt Analysis PASSED (Target: {})", target_file);
-            println!("  - Time Complexity: {:?} (Expected: {:?})", report.actual_trend, expected);
+            println!(
+                "  - Time Complexity: {:?} (Expected: {:?})",
+                report.actual_trend, expected
+            );
             println!("  - Space Complexity: {:?}", space_report.actual_trend);
-            
+
             let mut checks = Vec::new();
             if args.require_cache_padding {
-                checks.push(format!("Cache Padding: {}", if static_cache_padding.unwrap_or(false) { "Yes" } else { "No" }));
+                checks.push(format!(
+                    "Cache Padding: {}",
+                    if static_cache_padding.unwrap_or(false) {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                ));
             }
             if args.require_branch_hints {
-                checks.push(format!("Branch Hints: {}", if static_branch_hints.unwrap_or(false) { "Yes" } else { "No" }));
+                checks.push(format!(
+                    "Branch Hints: {}",
+                    if static_branch_hints.unwrap_or(false) {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                ));
             }
             if args.require_aerospace_grade {
-                checks.push(format!("Aerospace: {}", if static_aerospace_grade.as_ref().map_or(true, |v| v.is_empty()) { "Passed" } else { "Failed" }));
+                checks.push(format!(
+                    "Aerospace: {}",
+                    if static_aerospace_grade.as_ref().is_none_or(|v| v.is_empty()) {
+                        "Passed"
+                    } else {
+                        "Failed"
+                    }
+                ));
             }
             if args.require_watchdog_timeout {
-                checks.push(format!("Watchdog: {}", if static_watchdog_timeout.unwrap_or(false) { "Yes" } else { "No" }));
+                checks.push(format!(
+                    "Watchdog: {}",
+                    if static_watchdog_timeout.unwrap_or(false) {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                ));
             }
             if args.require_stress_test {
-                checks.push(format!("Stress Test: {}", if static_stress_test.unwrap_or(false) { "Yes" } else { "No" }));
+                checks.push(format!(
+                    "Stress Test: {}",
+                    if static_stress_test.unwrap_or(false) {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                ));
             }
             if !checks.is_empty() {
                 println!("  - Static Checks: {}", checks.join(", "));
             } else {
                 println!("  - Static Checks: None Required");
             }
-            
+
             if let Some(rate) = coverage_rate_val {
                 println!("  - Function Coverage: {:.1}%", rate);
             }
@@ -644,7 +760,9 @@ fn run_fix() {
 }
 
 fn run_audit() {
-    unsafe { std::env::set_var("COVOPT_COMPACT", "1"); }
+    unsafe {
+        std::env::set_var("COVOPT_COMPACT", "1");
+    }
     let config_path = ".covopt.toml";
     if !PathBuf::from(config_path).exists() {
         eprintln!("Config file {} not found.", config_path);

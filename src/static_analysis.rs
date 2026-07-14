@@ -157,8 +157,16 @@ impl<'ast> Visit<'ast> for ThreadActivityVisitor {
     fn visit_local(&mut self, node: &'ast syn::Local) {
         if let Some(init) = &node.init {
             let is_spawn = match &*init.expr {
-                syn::Expr::Call(call) if let syn::Expr::Path(expr_path) = &*call.func
-                    && expr_path.path.segments.last().map_or(false, |seg| seg.ident == "spawn") => true,
+                syn::Expr::Call(call)
+                    if let syn::Expr::Path(expr_path) = &*call.func
+                        && expr_path
+                            .path
+                            .segments
+                            .last()
+                            .is_some_and(|seg| seg.ident == "spawn") =>
+                {
+                    true
+                }
                 syn::Expr::MethodCall(call) if call.method == "spawn" => true,
                 _ => false,
             };
@@ -522,10 +530,20 @@ impl<'ast> Visit<'ast> for AerospaceVisitor {
         {
             match segment.ident.to_string().as_str() {
                 "spawn" => self.has_thread_spawn = true,
-                "new" if !self.in_test && expr_path.path.segments.iter().any(|s| s.ident == "Box" || s.ident == "HashMap") => {
+                "new"
+                    if !self.in_test
+                        && expr_path
+                            .path
+                            .segments
+                            .iter()
+                            .any(|s| s.ident == "Box" || s.ident == "HashMap") =>
+                {
                     self.has_heap_containers = true;
                 }
-                "with_capacity" if !self.in_test && expr_path.path.segments.iter().any(|s| s.ident == "Vec") => {
+                "with_capacity"
+                    if !self.in_test
+                        && expr_path.path.segments.iter().any(|s| s.ident == "Vec") =>
+                {
                     self.has_heap_containers = true;
                 }
                 _ => {}
@@ -658,20 +676,16 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
                 .to_string(),
         );
     }
-    if visitor.has_std {
-        if !source_file.components().any(|c| c.as_os_str() == "tests") {
-            violations.push(
-                "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
-            );
-        }
+    if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
+        violations.push(
+            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
+        );
     }
 
-    if !source_file.components().any(|c| c.as_os_str() == "tests") {
-        if !check_crate_root_no_std() {
-            violations.push(
+    if !source_file.components().any(|c| c.as_os_str() == "tests") && !check_crate_root_no_std() {
+        violations.push(
                 "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]`. Aerospace grade requires strict no_std environment.".to_string(),
             );
-        }
     }
     if visitor.has_unsafe_allow {
         violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
@@ -768,14 +782,14 @@ pub fn analyze_stress_test(source_file: &Path) -> bool {
 fn check_crate_root_no_std() -> bool {
     let roots = ["src/lib.rs", "src/main.rs"];
     for root in roots {
-        if let Ok(content) = fs::read_to_string(root) {
-            if let Ok(ast) = syn::parse_file(&content) {
-                for attr in &ast.attrs {
-                    if let syn::AttrStyle::Inner(_) = attr.style
-                        && attr.path().is_ident("no_std")
-                    {
-                        return true;
-                    }
+        if let Ok(content) = fs::read_to_string(root)
+            && let Ok(ast) = syn::parse_file(&content)
+        {
+            for attr in &ast.attrs {
+                if let syn::AttrStyle::Inner(_) = attr.style
+                    && attr.path().is_ident("no_std")
+                {
+                    return true;
                 }
             }
         }

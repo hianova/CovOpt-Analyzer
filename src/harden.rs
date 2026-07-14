@@ -93,13 +93,18 @@ fn find_target_file(asan_log: &str) -> Option<(String, usize)> {
             let chars: Vec<char> = line[..pos].chars().collect();
             let mut start_idx = 0;
             for i in (0..chars.len()).rev() {
-                if chars[i] == ' ' || chars[i] == '\t' || chars[i] == '"' || chars[i] == '\'' || (chars[i] == '/' && i > 0 && chars[i-1] == ' ') {
+                if chars[i] == ' '
+                    || chars[i] == '\t'
+                    || chars[i] == '"'
+                    || chars[i] == '\''
+                    || (chars[i] == '/' && i > 0 && chars[i - 1] == ' ')
+                {
                     start_idx = i + 1;
                     break;
                 }
             }
             let path_str = line[start_idx..pos + 3].trim();
-            
+
             let remaining = &line[pos + 4..];
             let mut end_idx = 0;
             for (i, c) in remaining.char_indices() {
@@ -109,26 +114,32 @@ fn find_target_file(asan_log: &str) -> Option<(String, usize)> {
                     break;
                 }
             }
-            if end_idx > 0 {
-                if let Ok(line_num) = remaining[..end_idx].parse::<usize>() {
-                    let path = std::path::Path::new(path_str);
-                    if path.exists() {
-                        if let Ok(path_canon) = path.canonicalize() {
-                            let path_str_canon = path_canon.to_string_lossy().to_string();
-                            if !path_str_canon.contains(".cargo") && !path_str_canon.contains(".rustup") && !path_str_canon.contains("/rustc/") {
-                                return Some((path_str_canon, line_num));
-                            }
+            if end_idx > 0
+                && let Ok(line_num) = remaining[..end_idx].parse::<usize>()
+            {
+                let path = std::path::Path::new(path_str);
+                if path.exists() {
+                    if let Ok(path_canon) = path.canonicalize() {
+                        let path_str_canon = path_canon.to_string_lossy().to_string();
+                        if !path_str_canon.contains(".cargo")
+                            && !path_str_canon.contains(".rustup")
+                            && !path_str_canon.contains("/rustc/")
+                        {
+                            return Some((path_str_canon, line_num));
                         }
-                    } else {
-                        for prefix in &["", "src/", "tests/"] {
-                            let test_path = std::path::Path::new(prefix).join(path);
-                            if test_path.exists() {
-                                if let Ok(path_canon) = test_path.canonicalize() {
-                                    let path_str_canon = path_canon.to_string_lossy().to_string();
-                                    if !path_str_canon.contains(".cargo") && !path_str_canon.contains(".rustup") && !path_str_canon.contains("/rustc/") {
-                                        return Some((path_str_canon, line_num));
-                                    }
-                                }
+                    }
+                } else {
+                    for prefix in &["", "src/", "tests/"] {
+                        let test_path = std::path::Path::new(prefix).join(path);
+                        if test_path.exists()
+                            && let Ok(path_canon) = test_path.canonicalize()
+                        {
+                            let path_str_canon = path_canon.to_string_lossy().to_string();
+                            if !path_str_canon.contains(".cargo")
+                                && !path_str_canon.contains(".rustup")
+                                && !path_str_canon.contains("/rustc/")
+                            {
+                                return Some((path_str_canon, line_num));
                             }
                         }
                     }
@@ -141,7 +152,10 @@ fn find_target_file(asan_log: &str) -> Option<(String, usize)> {
 
 fn call_llm(prompt: &str) -> Option<String> {
     let (url, body, auth_header) = if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={}", key);
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={}",
+            key
+        );
         let body = serde_json::json!({
             "contents": [
                 {
@@ -160,10 +174,10 @@ fn call_llm(prompt: &str) -> Option<String> {
     } else {
         let endpoint = std::env::var("COVOPT_LLM_ENDPOINT")
             .unwrap_or_else(|_| "http://localhost:11434/v1/chat/completions".to_string());
-        let model = std::env::var("COVOPT_LLM_MODEL")
-            .unwrap_or_else(|_| "qwen-1.7b-instruct".to_string());
+        let model =
+            std::env::var("COVOPT_LLM_MODEL").unwrap_or_else(|_| "qwen-1.7b-instruct".to_string());
         let api_key = std::env::var("COVOPT_LLM_API_KEY").ok();
-        
+
         let body = serde_json::json!({
             "model": model,
             "messages": [
@@ -188,7 +202,7 @@ fn call_llm(prompt: &str) -> Option<String> {
         .arg("Content-Type: application/json")
         .arg("-d")
         .arg(&body_str);
-        
+
     if let Some(ref auth) = auth_header {
         curl.arg("-H").arg(auth);
     }
@@ -198,7 +212,7 @@ fn call_llm(prompt: &str) -> Option<String> {
     if output.status.success() {
         let stdout_str = String::from_utf8_lossy(&output.stdout);
         let res: serde_json::Value = serde_json::from_str(&stdout_str).ok()?;
-        
+
         if let Some(text) = res["candidates"][0]["content"]["parts"][0]["text"].as_str() {
             return Some(text.to_string());
         }
@@ -240,7 +254,10 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
     while attempt < max_fix_attempts {
         attempt += 1;
         if attempt > 1 {
-            println!("\n--- [Auto-Fix] Verification Attempt {}/{} ---", attempt, max_fix_attempts);
+            println!(
+                "\n--- [Auto-Fix] Verification Attempt {}/{} ---",
+                attempt, max_fix_attempts
+            );
         } else {
             println!(
                 "Starting Sanitizer '{}' on target '{}'...",
@@ -275,10 +292,13 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
                 true
             } else {
                 eprintln!("{}", stderr_str);
-                
+
                 let full_log = format!("{}\n{}", stdout_str, stderr_str);
                 if let Some((filepath, line_num)) = find_target_file(&full_log) {
-                    println!("\n[Auto-Fix] Sanitizer detected crash in {} at line {}", filepath, line_num);
+                    println!(
+                        "\n[Auto-Fix] Sanitizer detected crash in {} at line {}",
+                        filepath, line_num
+                    );
                     if let Ok(content) = std::fs::read_to_string(&filepath) {
                         let prompt = format!(
                             "You are an expert Rust systems programmer. Fix the memory safety bug (Use-After-Free, Double Free, Data Race, or Out-of-bounds) in the following Rust code. \
@@ -290,23 +310,32 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
                              Please output the complete fixed file content inside a single ```rust block. Do not include any other text, warnings, or explanations.",
                             full_log, filepath, content
                         );
-                        
+
                         println!("[Auto-Fix] Querying LLM to repair memory safety issue...");
                         if let Some(response) = call_llm(&prompt) {
                             if let Some(fixed_code) = extract_code(&response) {
-                                println!("[Auto-Fix] Received fix suggestion from LLM. Overwriting {}...", filepath);
+                                println!(
+                                    "[Auto-Fix] Received fix suggestion from LLM. Overwriting {}...",
+                                    filepath
+                                );
                                 if std::fs::write(&filepath, fixed_code).is_ok() {
                                     continue;
                                 }
                             } else {
-                                println!("[Auto-Fix] Could not extract valid code from LLM response.");
+                                println!(
+                                    "[Auto-Fix] Could not extract valid code from LLM response."
+                                );
                             }
                         } else {
-                            println!("[Auto-Fix] Failed to get response from LLM API (make sure GEMINI_API_KEY is set or local LLM server is running).");
+                            println!(
+                                "[Auto-Fix] Failed to get response from LLM API (make sure GEMINI_API_KEY is set or local LLM server is running)."
+                            );
                         }
                     }
                 } else {
-                    println!("[Auto-Fix] Could not resolve offending file path from sanitizer logs.");
+                    println!(
+                        "[Auto-Fix] Could not resolve offending file path from sanitizer logs."
+                    );
                 }
                 false
             }
