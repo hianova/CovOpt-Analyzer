@@ -66,10 +66,13 @@ enum Commands {
     /// Profile a target to diagnose CPU hotspots and lock contention
     Profile(ProfileArgs),
     /// Run a single analysis target (legacy mode)
+    #[command(hide = true)]
     Run(RunArgs),
     /// Tune parameters using NP-hard Monte Carlo diffusion
+    #[command(hide = true)]
     Tune(TuneArgs),
     /// Logarithmic NP-Hard Exploration via Meta-Programming
+    #[command(hide = true)]
     Explore(ExploreArgs),
 }
 
@@ -180,35 +183,35 @@ struct RunArgs {
     mca_cpu: Option<String>,
 
     /// Require static cache padding detection
-    #[arg(long)]
+    #[arg(long, hide = true)]
     require_cache_padding: bool,
 
     /// Enable symbolic regression to reinvent Lean 4 style formal mathematical proofs
-    #[arg(long)]
+    #[arg(long, hide = true)]
     formalize: bool,
 
     /// Require static branch prediction hint detection
-    #[arg(long)]
+    #[arg(long, hide = true)]
     require_branch_hints: bool,
 
     /// Require strict aerospace grade static analysis
-    #[arg(long)]
+    #[arg(long, hide = true)]
     require_aerospace_grade: bool,
 
     /// Require watchdog timeout detection in the target file
-    #[arg(long)]
+    #[arg(long, hide = true)]
     require_watchdog_timeout: bool,
 
     /// Require high-pressure stress test detection in the target file
-    #[arg(long)]
+    #[arg(long, hide = true)]
     require_stress_test: bool,
 
     /// Optional polling threshold for high-frequency polling detection
-    #[arg(long)]
+    #[arg(long, hide = true)]
     polling_threshold: Option<u64>,
 
     /// Run the discrete diffusion NP-hard solver to superoptimize ASM
-    #[arg(long)]
+    #[arg(long, hide = true)]
     optimize: bool,
 }
 
