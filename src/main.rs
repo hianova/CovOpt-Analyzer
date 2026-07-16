@@ -8,6 +8,9 @@ pub mod mca;
 pub mod profiler;
 pub mod runner;
 pub mod static_analysis;
+pub mod optimizer;
+pub mod parameter_optimizer;
+pub mod explore;
 
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -64,6 +67,44 @@ enum Commands {
     Profile(ProfileArgs),
     /// Run a single analysis target (legacy mode)
     Run(RunArgs),
+    /// Tune parameters using NP-hard Monte Carlo diffusion
+    Tune(TuneArgs),
+    /// Logarithmic NP-Hard Exploration via Meta-Programming
+    Explore(ExploreArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct TuneArgs {
+    /// The name of the test to evaluate fitness score
+    #[arg(short, long)]
+    test: String,
+
+    /// Comma-separated parameter ranges (e.g. "WARMUP_PCT:50..100, WARMUP_STEP:1..20")
+    #[arg(short, long)]
+    params: String,
+
+    /// Number of Monte Carlo iterations
+    #[arg(short, long, default_value_t = 100)]
+    iterations: usize,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct ExploreArgs {
+    /// Directory to scan for source files
+    #[arg(long, default_value = "src")]
+    src: String,
+
+    /// Target trait name to look for (e.g. ScienceObjective)
+    #[arg(long)]
+    trait_name: String,
+
+    /// Target method to extract tokens from for similarity projection
+    #[arg(long, default_value = "evaluate_fitness")]
+    method_name: String,
+
+    /// Similarity threshold for perfect resonance (0.0 to 1.0)
+    #[arg(long, default_value_t = 0.99)]
+    threshold: f64,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -165,6 +206,10 @@ struct RunArgs {
     /// Optional polling threshold for high-frequency polling detection
     #[arg(long)]
     polling_threshold: Option<u64>,
+
+    /// Run the discrete diffusion NP-hard solver to superoptimize ASM
+    #[arg(long)]
+    optimize: bool,
 }
 
 fn parse_complexity(s: &str) -> Complexity {
@@ -517,6 +562,24 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
                     }
+                    
+                    if args.optimize {
+                        wlog!(log, "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine...");
+                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(20);
+                        let base_asm_lines: Vec<String> = asm_block.lines().map(|s| s.to_string()).collect();
+                        
+                        let optimized_asm = optimizer.optimize_asm(base_asm_lines, 20, args.mca_cpu.clone());
+                        let optimized_text = optimized_asm.join("\n");
+                        
+                        wlog!(log, "\n[Optimizer Output] Best ASM schedule found:");
+                        wlog!(log, "{}", optimized_text);
+                        
+                        if let Ok(opt_report) = mca_runner.run(&optimized_text) {
+                            wlog!(log, "\n[Optimized MCA Report]");
+                            wlog!(log, "Block RThroughput: {:.2}", opt_report.block_rthroughput);
+                            wlog!(log, "IPC:               {:.2}", opt_report.ipc);
+                        }
+                    }
                 } else {
                     wlog!(
                         log,
@@ -797,6 +860,7 @@ fn run_audit() {
             require_stress_test: target.require_stress_test.unwrap_or(false),
             polling_threshold: target.polling_threshold,
             formalize: false, // Audit defaults to false unless specified
+            optimize: false,
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
@@ -970,6 +1034,22 @@ fn main() {
             if !run_analysis(&args, false) {
                 std::process::exit(1);
             }
+        }
+        Some(Commands::Tune(args)) => {
+            let opt = parameter_optimizer::ParameterOptimizer::new(
+                args.test.clone(),
+                &args.params,
+                args.iterations,
+            );
+            opt.run();
+        }
+        Some(Commands::Explore(args)) => {
+            explore::run(
+                &args.src,
+                &args.trait_name,
+                &args.method_name,
+                args.threshold,
+            );
         }
         None => {
             // Default to legacy run mode if flags are provided

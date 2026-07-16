@@ -271,38 +271,6 @@ pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
     };
 
     let Ok(ast) = syn::parse_file(&content) else {
-        let has_spawn = content.contains("thread::spawn")
-            || content.contains("tokio::spawn")
-            || content.contains("async_std::task::spawn");
-        let has_join = content.contains(".join()") || content.contains(".await");
-
-        if has_spawn {
-            if has_join {
-                activities.push(
-                    "Thread/Task Spawning (Lifecycle Complete: join/await found)".to_string(),
-                );
-            } else {
-                activities.push(
-                    "Thread/Task Spawning [WARNING: Lifecycle INCOMPLETE (no join/await found)]"
-                        .to_string(),
-                );
-            }
-        }
-        if content.contains("Mutex") {
-            activities.push("Mutex synchronization".to_string());
-        }
-        if content.contains("RwLock") {
-            activities.push("RwLock synchronization".to_string());
-        }
-        if content.contains("Atomic") {
-            activities.push("Atomic operations".to_string());
-        }
-        if content.contains("mpsc::") {
-            activities.push("MPSC Channels".to_string());
-        }
-        if content.contains("Arc<") {
-            activities.push("Arc reference counting".to_string());
-        }
         return activities;
     };
 
@@ -398,14 +366,9 @@ pub fn analyze_cache_padding(source_file: &Path) -> bool {
     if let Ok(ast) = syn::parse_file(&content) {
         let mut visitor = CachePaddingVisitor { has_padding: false };
         visitor.visit_file(&ast);
-        if visitor.has_padding {
-            return true;
-        }
+        return visitor.has_padding;
     }
-    content.contains("#[repr(align")
-        || content.contains("CachePadded")
-        || content.contains("cache_padded")
-        || content.contains("crossbeam_utils::CachePadded")
+    false
 }
 
 struct BranchHintVisitor {
@@ -439,15 +402,9 @@ pub fn analyze_branch_hints(source_file: &Path) -> bool {
     if let Ok(ast) = syn::parse_file(&content) {
         let mut visitor = BranchHintVisitor { has_hint: false };
         visitor.visit_file(&ast);
-        if visitor.has_hint {
-            return true;
-        }
+        return visitor.has_hint;
     }
-    content.contains("std::intrinsics::likely")
-        || content.contains("std::intrinsics::unlikely")
-        || content.contains("core::intrinsics::likely")
-        || content.contains("core::intrinsics::unlikely")
-        || content.contains("#[cold]")
+    false
 }
 
 struct AerospaceVisitor {
@@ -603,55 +560,7 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     };
 
     let Ok(ast) = syn::parse_file(&content) else {
-        let test_stripped_content = if let Some(idx) = content.find("#[cfg(test)]") {
-            &content[..idx]
-        } else {
-            &content
-        };
-        if test_stripped_content.contains("extern crate alloc") {
-            violations.push(
-                "Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade."
-                    .to_string(),
-            );
-        }
-        if test_stripped_content.contains("use std::")
-            || test_stripped_content.contains("extern crate std")
-        {
-            violations.push(
-                "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
-            );
-        }
-        if content.contains("#[allow(unsafe_op_in_unsafe_fn)]") {
-            violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
-        }
-        if content.contains("thread::spawn") || content.contains("tokio::spawn") {
-            violations.push("Dynamic thread spawning is prohibited.".to_string());
-        }
-        if content.contains("Box::new")
-            || content.contains("Vec::with_capacity")
-            || content.contains("HashMap::new")
-        {
-            violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string());
-        }
-        if content.contains("compare_exchange")
-            && content.contains("spin_loop")
-            && !content.contains(".load(")
-        {
-            violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string());
-        }
-        if content.contains("struct ")
-            && (content.contains("Guard")
-                || content.contains("StateNode")
-                || content.contains("ThreadState"))
-            && !content.contains("impl Drop for")
-            && !content.contains("impl<")
-            && !content.contains("Drop for")
-            && !content.contains("impl Drop")
-            && !content.contains("impl<T> Drop")
-            && !content.contains("impl<'a> Drop")
-        {
-            violations.push("Potential Resource Leak: Structs handling state or locks ('Guard', 'StateNode') must explicitly implement `Drop` to ensure deterministic thread resource cleanup.".to_string());
-        }
+        violations.push("Failed to parse file into AST. Strict aerospace grade requires valid Rust syntax.".to_string());
         return violations;
     };
 
@@ -678,13 +587,15 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     }
     if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
         violations.push(
-            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
+            "Standard library (`std`) usage is prohibited. Must be `#![no_std]
+use alloc::vec::Vec;`.".to_string(),
         );
     }
 
     if !source_file.components().any(|c| c.as_os_str() == "tests") && !check_crate_root_no_std() {
         violations.push(
-                "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]`. Aerospace grade requires strict no_std environment.".to_string(),
+                "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]
+use alloc::vec::Vec;`. Aerospace grade requires strict no_std environment.".to_string(),
             );
     }
     if visitor.has_unsafe_allow {
@@ -732,20 +643,15 @@ impl<'ast> Visit<'ast> for WatchdogVisitor {
 }
 
 pub fn analyze_watchdog_timeout(source_file: &Path) -> bool {
-    if let Ok(content) = fs::read_to_string(source_file) {
-        if let Ok(ast) = syn::parse_file(&content) {
+    if let Ok(content) = fs::read_to_string(source_file)
+        && let Ok(ast) = syn::parse_file(&content) {
             let mut visitor = WatchdogVisitor {
                 has_watchdog: false,
             };
             visitor.visit_file(&ast);
-            if visitor.has_watchdog {
-                return true;
-            }
+            return visitor.has_watchdog;
         }
-        content.contains("watchdog") || content.contains("timeout")
-    } else {
-        false
-    }
+    false
 }
 
 struct StressVisitor {
@@ -763,20 +669,13 @@ impl<'ast> Visit<'ast> for StressVisitor {
 }
 
 pub fn analyze_stress_test(source_file: &Path) -> bool {
-    if let Ok(content) = fs::read_to_string(source_file) {
-        if let Ok(ast) = syn::parse_file(&content) {
+    if let Ok(content) = fs::read_to_string(source_file)
+        && let Ok(ast) = syn::parse_file(&content) {
             let mut visitor = StressVisitor { has_stress: false };
             visitor.visit_file(&ast);
-            if visitor.has_stress {
-                return true;
-            }
+            return visitor.has_stress;
         }
-        content.contains("stress")
-            || content.contains("fuzzy")
-            || content.contains("heavy_contention")
-    } else {
-        false
-    }
+    false
 }
 
 fn check_crate_root_no_std() -> bool {

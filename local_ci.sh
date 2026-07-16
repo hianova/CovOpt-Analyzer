@@ -8,7 +8,7 @@ echo "🚀 Starting Local CI Verification for CovOpt-Analyzer..."
 echo "------------------------------------------------"
 echo "1. Code Quality: Checking formatting (cargo fmt)"
 echo "------------------------------------------------"
-cargo fmt --all -- --check
+cargo fmt -- --check
 
 echo "------------------------------------------------"
 echo "2. Code Quality: Linting (cargo clippy)"

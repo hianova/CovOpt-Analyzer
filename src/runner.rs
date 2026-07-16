@@ -362,14 +362,18 @@ impl CargoTestRunner {
         }
 
         let mut all_asm = String::new();
-        if let Ok(entries) = fs::read_dir("target/release/deps") {
-            for entry in entries.flatten() {
-                if let Some(ext) = entry.path().extension()
-                    && ext == "s"
-                    && let Ok(content) = fs::read_to_string(entry.path())
-                {
-                    all_asm.push_str(&content);
-                    all_asm.push('\n');
+        let possible_targets = vec!["target/release/deps", "../target/release/deps", "../../target/release/deps"];
+        for target_dir in possible_targets {
+            if let Ok(entries) = fs::read_dir(target_dir) {
+                for entry in entries.flatten() {
+                    if let Some(ext) = entry.path().extension() {
+                        if ext == "s" {
+                            if let Ok(content) = fs::read_to_string(entry.path()) {
+                                all_asm.push_str(&content);
+                                all_asm.push('\n');
+                            }
+                        }
+                    }
                 }
             }
         }
