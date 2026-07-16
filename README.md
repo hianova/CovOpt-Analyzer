@@ -175,6 +175,36 @@ This will run the analysis for all the configured targets automatically.
 
 ---
 
+## Continuous Integration (GitHub Actions) 🐙
+
+You can easily integrate CovOpt-Analyzer into your CI pipeline using `covopt audit`. Here is a sample GitHub Actions workflow (`.github/workflows/covopt.yml`):
+
+```yaml
+name: CovOpt Analysis
+
+on: [push, pull_request]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      
+      # IMPORTANT: cargo-llvm-cov is required for coverage extraction
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+        
+      - name: Install CovOpt-Analyzer
+        run: cargo install --git https://github.com/your-username/CovOpt-Analyzer.git
+        
+      - name: Run Audit
+        run: covopt audit
+```
+
 ## Supported Expected Complexities (`--expected`)
 - `O1` or `O(1)` - Constant Time
 - `OLogN` or `O(LogN)` - Logarithmic Time
