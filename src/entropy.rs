@@ -67,23 +67,34 @@ fn compute_cli_noise(details: &mut String) -> f64 {
 fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let _ = writeln!(details, "  -> Calculating Fuzz-Cov Variance (A)...");
     let iterations = config.fuzz_iterations.unwrap_or(10);
-    let mut hit_counts = Vec::new();
     let n_value = 100; // Use a fixed N for fuzzing loops
 
     let output_dir = tempfile::tempdir()
         .expect("Failed to create tempdir")
         .path()
         .to_path_buf();
-    let runner = CargoTestRunner::new(&config.test, &output_dir);
+    let mut runner = CargoTestRunner::new(&config.test, &output_dir);
+    runner.prepare().expect("Failed to prepare executables");
 
-    for i in 0..iterations {
-        let seed = i as u64 * 1337 + 1000;
-        if let Ok((map, _)) = runner.run(n_value, Some(seed))
-            && let Some(hits) = map.find_hit_count(&config.target_file, config.target_line)
-        {
-            hit_counts.push(hits as f64);
-        }
-    }
+    use rayon::prelude::*;
+
+    let hit_counts: Vec<f64> = (0..iterations)
+        .into_par_iter()
+        .filter_map(|i| {
+            let seed = i as u64 * 1337 + 1000;
+            let iter_dir = tempfile::tempdir().expect("Failed to create tempdir").path().to_path_buf();
+            let mut local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir);
+            local_runner.executables = runner.executables.clone();
+            
+            if let Ok((map, _)) = local_runner.run(n_value, Some(seed), Some(&config.target_file))
+                && let Some(hits) = map.find_hit_count(&config.target_file, config.resolve_target_line())
+            {
+                Some(hits as f64)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     if hit_counts.is_empty() {
         let _ = writeln!(
@@ -140,17 +151,14 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     }
 
     let mut covered_lines_per_test: Vec<std::collections::HashSet<u64>> = Vec::new();
+    let output_dir = tempfile::tempdir().expect("Failed to create tempdir").path().to_path_buf();
 
-    for test_name in &test_cases {
-        let output_dir = tempfile::tempdir()
-            .expect("Failed to create tempdir")
-            .path()
-            .to_path_buf();
-        let runner = CargoTestRunner::new(test_name, &output_dir);
-
-        if let Ok(map) = runner.run(100, None) {
+    for tc in &test_cases {
+        let mut runner = CargoTestRunner::new(tc, &output_dir);
+        runner.prepare().unwrap_or_default();
+        if let Ok((map, _)) = runner.run(100, None, None) {
             let mut lines = std::collections::HashSet::new();
-            for (file, file_cov) in &map.0.hit_counts {
+            for (file, file_cov) in &map.hit_counts {
                 if file.contains(&config.target_file) {
                     for (&line_number, &count) in file_cov {
                         if count > 0 {

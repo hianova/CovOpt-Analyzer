@@ -178,6 +178,10 @@ struct RunArgs {
     #[arg(long)]
     target_line: Option<u64>,
 
+    /// Target marker string to dynamically find the line number
+    #[arg(long)]
+    target_marker: Option<String>,
+
     /// Optional LLVM-MCA CPU target (e.g. apple-m1, skylake)
     #[arg(long)]
     mca_cpu: Option<String>,
@@ -263,7 +267,22 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         .target_file
         .as_ref()
         .expect("--target-file is required");
-    let target_line = args.target_line.expect("--target-line is required");
+    let target_line = if let Some(marker) = &args.target_marker {
+        let file_content = std::fs::read_to_string(target_file).expect("Failed to read target file");
+        let mut found_line = None;
+        for (i, line) in file_content.lines().enumerate() {
+            if line.contains(marker) {
+                found_line = Some((i + 1) as u64);
+                break;
+            }
+        }
+        found_line.unwrap_or_else(|| {
+            eprintln!("CovOpt-Analyzer: target_marker '{}' not found in {}", marker, target_file);
+            std::process::exit(1);
+        })
+    } else {
+        args.target_line.expect("--target-line or --target-marker is required")
+    };
 
     let expected = parse_complexity(expected_str);
 
@@ -272,9 +291,12 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         .map(|s| s.trim().parse().expect("Failed to parse N value"))
         .collect();
 
-    let dir = tempfile::tempdir().expect("Failed to create temporary directory");
-    let output_dir = dir.path().to_path_buf();
-    let runner = CargoTestRunner::new(test_name, &output_dir);
+    let output_dir = tempfile::tempdir()
+        .expect("Failed to create tempdir")
+        .path()
+        .to_path_buf();
+    let mut runner = CargoTestRunner::new(&args.test.clone().unwrap(), &output_dir);
+    runner.prepare().expect("Failed to prepare runner");
 
     wlog!(log, "Starting CovOpt Analysis for test '{}'...", test_name);
     wlog!(log, "Target: {}:{}", target_file, target_line);
@@ -291,7 +313,7 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         wlog!(log, "---------------------------------------------------");
         wlog!(log, "Running for N = {}...", n);
 
-        let (map, peak_rss) = match runner.run(n as usize, None) {
+        let (map, peak_rss) = match runner.run(n as usize, None, Some(&target_file)) {
             Ok(m) => m,
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to run coverage for N={}: {}", n, e);
@@ -500,11 +522,13 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 }
                 if asm_block_opt.is_none() {
                     let demangled = rustc_demangle::demangle(&symbol).to_string();
-                    let no_trailing_generics = match demangled.rfind(">::") {
-                        Some(idx) => &demangled[..idx + 1],
-                        None => &demangled,
+                    let clean_demangled = if demangled.ends_with('>') && demangled.contains("::<") {
+                        let idx = demangled.rfind("::<").unwrap();
+                        &demangled[..idx]
+                    } else {
+                        &demangled
                     };
-                    let parts: Vec<&str> = no_trailing_generics.split("::").collect();
+                    let parts: Vec<&str> = clean_demangled.split("::").collect();
                     if parts.len() >= 2 {
                         let fn_name = parts
                             .last()
@@ -522,7 +546,7 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                             .next()
                             .unwrap_or("")
                             .trim()
-                            .trim_start_matches(['<', '[']);
+                            .trim_matches(['<', '>', '[', ']']);
 
                         wlog!(
                             log,
@@ -530,8 +554,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                             struct_name,
                             fn_name
                         );
+                        let t_extract = std::time::Instant::now();
                         asm_block_opt = runner
                             .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
+                        println!("[Profile] extract_asm_block_by_keywords 2: {:?}", t_extract.elapsed());
                     }
                     if asm_block_opt.is_none() {
                         wlog!(
@@ -539,8 +565,10 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                             "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...",
                             test_name
                         );
+                        let t_extract = std::time::Instant::now();
                         asm_block_opt =
                             runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
+                        println!("[Profile] extract_asm_block_by_keywords 3: {:?}", t_extract.elapsed());
                     }
                 }
 
@@ -552,9 +580,12 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                     wlog!(log, "Allocs: {}", mem_profile.allocs);
 
                     let mca_runner = McaRunner::new(args.mca_cpu.clone());
+                    let t_mca = std::time::Instant::now();
                     match mca_runner.run(&asm_block) {
                         Ok(mca_report) => {
+                            println!("[Profile] llvm-mca: {:?}", t_mca.elapsed());
                             wlog!(log, "\n[MCA Report]");
+
                             wlog!(
                                 log,
                                 "Block RThroughput: {:.2}",
@@ -704,7 +735,7 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 println!("  - Function Coverage: {:.1}%", rate);
             }
             if let Some((ipc, rt)) = mca_stats {
-                println!("  - LLVM-MCA: IPC {:.2}, RThroughput {:.2}", ipc, rt);
+                println!("  - LLVM-MCA (Static Block): IPC {:.2}, RThroughput {:.2}", ipc, rt);
             }
         }
     } else {
@@ -777,6 +808,7 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 - `covopt init`: Initializes a `.covopt.toml` and injects these rules into `.agents/AGENTS.md`.
 - `covopt auto`: Automatically discovers the hottest loop and generates `.covopt.toml`.
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
+- `covopt --help`: View all available commands and detailed usage instructions.
 "#;
 
 fn init_config() {
@@ -793,7 +825,7 @@ test = "my_benchmark_test"
 expected = "O(1)"
 n_values = "100,500,1000"
 target_file = "src/lib.rs"
-target_line = 10
+target_marker = "COVOPT_ANCHOR"
 require_cache_padding = false
 require_branch_hints = false
 require_aerospace_grade = false
@@ -924,7 +956,8 @@ fn run_audit() {
             expected: Some(target.expected.clone()),
             n_values: Some(target.n_values.clone()),
             target_file: Some(target.target_file.clone()),
-            target_line: Some(target.target_line),
+            target_line: Some(target.resolve_target_line()),
+            target_marker: None,
             mca_cpu: target.mca_cpu.clone(),
             require_cache_padding: target.require_cache_padding.unwrap_or(false),
             require_branch_hints: target.require_branch_hints.unwrap_or(false),
@@ -998,10 +1031,11 @@ fn run_auto_discovery(test_name: &str) {
     }
 
     let output_dir = PathBuf::from(".covopt");
-    let runner = CargoTestRunner::new(test_name, &output_dir);
+    let mut runner = CargoTestRunner::new(test_name, &output_dir);
+    runner.prepare().expect("Failed to prepare runner");
 
     // Run the test once with N=1000 (a reasonably high number to saturate loops)
-    let (map, _) = match runner.run(1000, None) {
+    let (map, _) = match runner.run(1000, None, None) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("CovOpt-Analyzer: Failed to run test {}: {}", test_name, e);

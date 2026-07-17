@@ -132,6 +132,7 @@ impl CoverageRunner {
 pub struct CargoTestRunner {
     pub test_name: String,
     pub output_dir: PathBuf,
+    pub executables: Option<Vec<PathBuf>>,
 }
 
 impl CargoTestRunner {
@@ -139,30 +140,60 @@ impl CargoTestRunner {
         Self {
             test_name: test_name.to_string(),
             output_dir: output_dir.to_path_buf(),
+            executables: None,
         }
     }
 
-    pub fn run(&self, n: usize, seed: Option<u64>) -> Result<(CoverageMap, u64), String> {
+    pub fn prepare(&mut self) -> Result<(), String> {
+        if self.executables.is_none() {
+            self.executables = Some(self.compile_tests()?);
+        }
+        Ok(())
+    }
+
+    pub fn run(&self, n: usize, seed: Option<u64>, target_file: Option<&str>) -> Result<(CoverageMap, u64), String> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir)
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        let executables = self.compile_tests()?;
+        let t0 = std::time::Instant::now();
+        let executables = self.executables.as_ref().ok_or("Not prepared")?;
+        
+        let t1 = std::time::Instant::now();
+
         if executables.is_empty() {
             return Err("No test executables found".to_string());
         }
 
-        let peak_rss = self.execute_tests(&executables, n, seed)?;
+        let t2 = std::time::Instant::now();
+        let (peak_rss, successful_exe) = self.execute_tests(executables, n, seed)?;
+        let t3 = std::time::Instant::now();
         self.merge_profdata(n)?;
-        let lcov_str = self.export_lcov(&executables, n)?;
+        let t4 = std::time::Instant::now();
+
+        let target_executables = if let Some(exe) = successful_exe {
+            vec![exe]
+        } else {
+            executables.clone()
+        };
+
+        let lcov_str = self.export_lcov(&target_executables, n, target_file)?;
+        let t5 = std::time::Instant::now();
 
         let map = CoverageMap::from_lcov(&lcov_str)?;
+        let t6 = std::time::Instant::now();
+
+        println!("[Profile] execute_tests (incl. OS process spawn overhead): {:?}", t3.duration_since(t2));
+        println!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
+        println!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
+        println!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
+
         std::fs::write("/tmp/covopt_debug.json", &lcov_str).unwrap();
         Ok((map, peak_rss))
     }
 
-    fn compile_tests(&self) -> Result<Vec<PathBuf>, String> {
+    pub fn compile_tests(&self) -> Result<Vec<PathBuf>, String> {
         let output = Command::new("cargo")
             .env("RUSTFLAGS", "-C instrument-coverage")
             .env(
@@ -219,7 +250,7 @@ impl CargoTestRunner {
         executables: &[PathBuf],
         n: usize,
         seed: Option<u64>,
-    ) -> Result<u64, String> {
+    ) -> Result<(u64, Option<PathBuf>), String> {
         // Clean up any existing profraw files for this N to prevent accumulating hit counts
         if let Ok(entries) = fs::read_dir(&self.output_dir) {
             for entry in entries.flatten() {
@@ -233,6 +264,7 @@ impl CargoTestRunner {
         }
 
         let mut max_rss = 0u64;
+        let mut successful_exe = None;
 
         for exe in executables {
             let profraw = self.output_dir.join(format!("covopt_{}_%p.profraw", n));
@@ -273,13 +305,16 @@ impl CargoTestRunner {
                     eprintln!("Test {} failed: {}", exe.display(), stderr);
                 }
             } else {
-                if stdout.contains("1 passed") && std::env::var("COVOPT_COMPACT").is_err() {
-                    println!("Test ran successfully.");
+                if stdout.contains("1 passed") {
+                    if std::env::var("COVOPT_COMPACT").is_err() {
+                        println!("Test ran successfully.");
+                    }
+                    successful_exe = Some(exe.clone());
                 }
             }
         }
 
-        Ok(max_rss)
+        Ok((max_rss, successful_exe))
     }
 
     fn merge_profdata(&self, n: usize) -> Result<(), String> {
@@ -320,7 +355,7 @@ impl CargoTestRunner {
         Ok(())
     }
 
-    fn export_lcov(&self, executables: &[PathBuf], n: usize) -> Result<String, String> {
+    fn export_lcov(&self, executables: &[PathBuf], n: usize, target_file: Option<&str>) -> Result<String, String> {
         let profdata = self.output_dir.join(format!("covopt_{}.profdata", n));
 
         let mut cmd = Command::new("llvm-cov");
@@ -328,9 +363,16 @@ impl CargoTestRunner {
         cmd.arg("-format=lcov");
         cmd.arg("-instr-profile").arg(&profdata);
 
-        // Add all executables
-        for exe in executables.iter() {
+        // The first executable is the positional BINARY argument
+        cmd.arg(&executables[0]);
+
+        // Add the rest using -object
+        for exe in executables.iter().skip(1) {
             cmd.arg("-object").arg(exe);
+        }
+
+        if let Some(tf) = target_file {
+            cmd.arg(tf);
         }
 
         let output = cmd
@@ -362,7 +404,11 @@ impl CargoTestRunner {
         }
 
         let mut all_asm = String::new();
-        let possible_targets = vec!["target/release/deps", "../target/release/deps", "../../target/release/deps"];
+        let possible_targets = vec![
+            "target/release/deps",
+            "../target/release/deps",
+            "../../target/release/deps",
+        ];
         for target_dir in possible_targets {
             if let Ok(entries) = fs::read_dir(target_dir) {
                 for entry in entries.flatten() {
@@ -386,7 +432,8 @@ impl CargoTestRunner {
     }
 
     pub fn extract_asm_block(&self, asm_content: &str, symbol: &str) -> Option<String> {
-        let symbol_label = format!("{}:", symbol);
+        let symbol_label1 = format!("{}:", symbol);
+        let symbol_label2 = format!("_{}:", symbol); // macOS adds an extra leading underscore
         let lines = asm_content.lines();
         let mut in_block = false;
         let mut block = String::new();
@@ -406,7 +453,7 @@ impl CargoTestRunner {
                 }
                 block.push_str(line);
                 block.push('\n');
-            } else if line == symbol_label {
+            } else if line == symbol_label1 || line == symbol_label2 {
                 in_block = true;
                 block.push_str(line);
                 block.push('\n');
