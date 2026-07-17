@@ -2,15 +2,15 @@ pub mod analyzer;
 pub mod config;
 pub mod coverage;
 pub mod entropy;
+pub mod explore;
 pub mod harden;
 pub mod heuristic;
 pub mod mca;
+pub mod optimizer;
+pub mod parameter_optimizer;
 pub mod profiler;
 pub mod runner;
 pub mod static_analysis;
-pub mod optimizer;
-pub mod parameter_optimizer;
-pub mod explore;
 
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -565,21 +565,30 @@ fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
                     }
-                    
+
                     if args.optimize {
-                        wlog!(log, "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine...");
+                        wlog!(
+                            log,
+                            "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine..."
+                        );
                         let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(20);
-                        let base_asm_lines: Vec<String> = asm_block.lines().map(|s| s.to_string()).collect();
-                        
-                        let optimized_asm = optimizer.optimize_asm(base_asm_lines, 20, args.mca_cpu.clone());
+                        let base_asm_lines: Vec<String> =
+                            asm_block.lines().map(|s| s.to_string()).collect();
+
+                        let optimized_asm =
+                            optimizer.optimize_asm(base_asm_lines, 20, args.mca_cpu.clone());
                         let optimized_text = optimized_asm.join("\n");
-                        
+
                         wlog!(log, "\n[Optimizer Output] Best ASM schedule found:");
                         wlog!(log, "{}", optimized_text);
-                        
+
                         if let Ok(opt_report) = mca_runner.run(&optimized_text) {
                             wlog!(log, "\n[Optimized MCA Report]");
-                            wlog!(log, "Block RThroughput: {:.2}", opt_report.block_rthroughput);
+                            wlog!(
+                                log,
+                                "Block RThroughput: {:.2}",
+                                opt_report.block_rthroughput
+                            );
                             wlog!(log, "IPC:               {:.2}", opt_report.ipc);
                         }
                     }
@@ -741,6 +750,27 @@ fi
     );
 }
 
+const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google Antigravity)
+
+**Usage**: AI Agent instructions for performance verification and parameter tuning.
+
+## Rule 1: Zero-Entropy Tuning
+- **NEVER** use hardcoded magical numbers for caching thresholds, buffer sizes, or critical performance parameters.
+- **ALWAYS** use the `covopt_param!` macro to define these parameters.
+- Before submitting performance-related code, you MUST run `covopt audit` and ensure the Entropy Score is `0.0`. If it is not, use `covopt tune` or `covopt explore` to converge the parameters.
+
+## Rule 2: Anti-DCE in Benchmarks
+- When writing tests or benchmarks for `covopt` or `llvm-mca`, **ALWAYS** wrap loop variables and return values with `std::hint::black_box()`.
+- This prevents LLVM Dead Code Elimination (DCE) from optimizing `O(N)` loops into `O(1)` during `--release` coverage builds.
+
+## Rule 3: Lock-Free Critical Paths
+- For extreme performance tiers (e.g., `< 50ns` p50 latency), **NEVER** use standard library `Mutex` or `RwLock` on the critical path.
+- **ALWAYS** use QSBR (Quiescent State Based Reclamation) or Thread Local Storage (TLS) for thread-safe memory and state management.
+
+## Rule 4: Strict Clippy Cleanliness
+- All macro-generated code from `covopt_param!` must be strictly typed. **DO NOT** use `#[allow(...)]` to ignore `as u8` or `as u16` cast warnings. Fix the underlying type inference instead.
+"#;
+
 fn init_config() {
     let config_path = std::path::PathBuf::from(".covopt.toml");
     if config_path.exists() {
@@ -802,6 +832,38 @@ require_stress_test = false
             content.insert_str(end_idx, "\nexclude = [\".covopt/\"]\n");
             let _ = std::fs::write("Cargo.toml", content);
             println!("Added exclude = [\".covopt/\"] to Cargo.toml [package] section.");
+        }
+    }
+
+    // Inject AI Agent Rules
+    let agents_dir = Path::new(".agents");
+    let rules_dir = agents_dir.join("rules");
+
+    if let Err(e) = std::fs::create_dir_all(&rules_dir) {
+        eprintln!("Failed to create .agents/rules directory: {}", e);
+    } else {
+        let rule_file = rules_dir.join("covopt-rules.md");
+        if let Err(e) = std::fs::write(&rule_file, COVOPT_AGENT_RULES) {
+            eprintln!("Failed to write rule file {:?}: {}", rule_file, e);
+        } else {
+            println!("Injected AI agent rules to {:?}.", rule_file);
+        }
+
+        let agents_md = agents_dir.join("AGENTS.md");
+        let current_agents_md = std::fs::read_to_string(&agents_md).unwrap_or_default();
+        if !current_agents_md.contains("CovOpt Optimization & Tuning Rules") {
+            let mut new_agents_md = current_agents_md;
+            if !new_agents_md.ends_with('\n') && !new_agents_md.is_empty() {
+                new_agents_md.push('\n');
+            }
+            new_agents_md.push('\n');
+            new_agents_md.push_str(COVOPT_AGENT_RULES);
+            new_agents_md.push('\n');
+            if let Err(e) = std::fs::write(&agents_md, new_agents_md) {
+                eprintln!("Failed to append to {:?}: {}", agents_md, e);
+            } else {
+                println!("Appended CovOpt rules to {:?}.", agents_md);
+            }
         }
     }
 }
