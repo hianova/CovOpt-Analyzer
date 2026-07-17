@@ -769,6 +769,14 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 
 ## Rule 4: Strict Clippy Cleanliness
 - All macro-generated code from `covopt_param!` must be strictly typed. **DO NOT** use `#[allow(...)]` to ignore `as u8` or `as u16` cast warnings. Fix the underlying type inference instead.
+
+## Available Commands (CovOpt-Analyzer)
+- `covopt audit`: Fast, low-entropy verification checking with quiet checklist output.
+- `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
+- `covopt sanitize --auto-fix`: Automate self-healing ReAct compilation loops to auto-patch memory bugs.
+- `covopt init`: Initializes a `.covopt.toml` and injects these rules into `.agents/AGENTS.md`.
+- `covopt auto`: Automatically discovers the hottest loop and generates `.covopt.toml`.
+- `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 "#;
 
 fn init_config() {
