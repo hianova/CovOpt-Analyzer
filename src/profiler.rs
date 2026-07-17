@@ -7,7 +7,10 @@ pub fn run_profile(test_name: Option<&str>, bin_name: Option<&str>, tool: &str) 
     }
 
     let target_name = test_name.unwrap_or_else(|| bin_name.unwrap_or("unknown"));
-    println!("Starting profiler '{}' for target '{}'...", tool, target_name);
+    println!(
+        "Starting profiler '{}' for target '{}'...",
+        tool, target_name
+    );
 
     match tool.to_lowercase().as_str() {
         "flamegraph" => run_flamegraph(test_name, bin_name),
@@ -51,8 +54,7 @@ fn run_flamegraph(test_name: Option<&str>, bin_name: Option<&str>) -> bool {
         child.arg("--bin").arg(b);
     }
 
-    let mut child = child.spawn()
-        .expect("Failed to start cargo flamegraph");
+    let mut child = child.spawn().expect("Failed to start cargo flamegraph");
 
     let status = child.wait().expect("Failed to wait for cargo flamegraph");
 
@@ -141,8 +143,7 @@ fn run_samply(test_name: Option<&str>, bin_name: Option<&str>) -> bool {
         child.arg("run").arg("--bin").arg(b).arg("--release");
     }
 
-    let mut child = child.spawn()
-        .expect("Failed to start samply");
+    let mut child = child.spawn().expect("Failed to start samply");
 
     let status = child.wait().expect("Failed to wait for samply");
 

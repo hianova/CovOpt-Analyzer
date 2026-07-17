@@ -9,7 +9,10 @@ pub struct TargetConfig {
     pub expected: String,
     pub n_values: String,
     pub target_file: String,
-    pub target_line: u64,
+    #[serde(default)]
+    pub target_line: Option<u64>,
+    #[serde(default)]
+    pub target_marker: Option<String>,
     pub fuzz_iterations: Option<u32>,
     pub mca_cpu: Option<String>,
     pub require_cache_padding: Option<bool>,
@@ -18,6 +21,24 @@ pub struct TargetConfig {
     pub require_watchdog_timeout: Option<bool>,
     pub require_stress_test: Option<bool>,
     pub polling_threshold: Option<u64>,
+}
+
+impl TargetConfig {
+    pub fn resolve_target_line(&self) -> u64 {
+        if let Some(marker) = &self.target_marker {
+            let file_content = fs::read_to_string(&self.target_file).unwrap_or_else(|_| panic!("Failed to read {}", self.target_file));
+            for (i, line) in file_content.lines().enumerate() {
+                if line.contains(marker) {
+                    return (i + 1) as u64;
+                }
+            }
+            panic!("CovOpt-Analyzer: target_marker '{}' not found in {}", marker, self.target_file);
+        } else if let Some(line) = self.target_line {
+            return line;
+        } else {
+            panic!("CovOpt-Analyzer: either target_line or target_marker must be provided in config");
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]

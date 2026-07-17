@@ -560,7 +560,10 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     };
 
     let Ok(ast) = syn::parse_file(&content) else {
-        violations.push("Failed to parse file into AST. Strict aerospace grade requires valid Rust syntax.".to_string());
+        violations.push(
+            "Failed to parse file into AST. Strict aerospace grade requires valid Rust syntax."
+                .to_string(),
+        );
         return violations;
     };
 
@@ -588,15 +591,17 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
         violations.push(
             "Standard library (`std`) usage is prohibited. Must be `#![no_std]
-use alloc::vec::Vec;`.".to_string(),
+use alloc::vec::Vec;`."
+                .to_string(),
         );
     }
 
     if !source_file.components().any(|c| c.as_os_str() == "tests") && !check_crate_root_no_std() {
         violations.push(
-                "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]
-use alloc::vec::Vec;`. Aerospace grade requires strict no_std environment.".to_string(),
-            );
+            "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]
+use alloc::vec::Vec;`. Aerospace grade requires strict no_std environment."
+                .to_string(),
+        );
     }
     if visitor.has_unsafe_allow {
         violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
@@ -644,13 +649,14 @@ impl<'ast> Visit<'ast> for WatchdogVisitor {
 
 pub fn analyze_watchdog_timeout(source_file: &Path) -> bool {
     if let Ok(content) = fs::read_to_string(source_file)
-        && let Ok(ast) = syn::parse_file(&content) {
-            let mut visitor = WatchdogVisitor {
-                has_watchdog: false,
-            };
-            visitor.visit_file(&ast);
-            return visitor.has_watchdog;
-        }
+        && let Ok(ast) = syn::parse_file(&content)
+    {
+        let mut visitor = WatchdogVisitor {
+            has_watchdog: false,
+        };
+        visitor.visit_file(&ast);
+        return visitor.has_watchdog;
+    }
     false
 }
 
@@ -670,11 +676,12 @@ impl<'ast> Visit<'ast> for StressVisitor {
 
 pub fn analyze_stress_test(source_file: &Path) -> bool {
     if let Ok(content) = fs::read_to_string(source_file)
-        && let Ok(ast) = syn::parse_file(&content) {
-            let mut visitor = StressVisitor { has_stress: false };
-            visitor.visit_file(&ast);
-            return visitor.has_stress;
-        }
+        && let Ok(ast) = syn::parse_file(&content)
+    {
+        let mut visitor = StressVisitor { has_stress: false };
+        visitor.visit_file(&ast);
+        return visitor.has_stress;
+    }
     false
 }
 
