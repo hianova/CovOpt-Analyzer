@@ -1,4 +1,3 @@
-agent_deterrence = true
 
 [[target]]
 test = "ruinsos_scheduler"

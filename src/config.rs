@@ -64,7 +64,6 @@ pub struct CovOptConfig {
     pub target: Vec<TargetConfig>,
     #[serde(default)]
     pub pipeline: PipelineConfig,
-    pub agent_deterrence: Option<bool>,
 }
 
 impl CovOptConfig {

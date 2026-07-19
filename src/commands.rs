@@ -638,9 +638,7 @@ pub fn init_config(args: crate::InitArgs) {
         };
 
         let default_config = format!(
-            r#"agent_deterrence = true
-
-[[target]]
+            r#"[[target]]
 test = "my_benchmark_test"
 expected = "O(1)"
 n_values = "100,500,1000"
