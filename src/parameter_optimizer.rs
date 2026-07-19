@@ -143,7 +143,7 @@ impl ParameterOptimizer {
 
         let env_content: String = best_params
             .iter()
-            .map(|(k, v)| format!("COVOPT_{}={}", k, v))
+            .map(|(k, v)| format!("COVOPT_PARAM_{}={}", k, v))
             .collect::<Vec<String>>()
             .join("\n");
 
@@ -162,7 +162,7 @@ impl ParameterOptimizer {
         cmd.args(["bench", "--bench", &self.target_test]);
 
         for (name, val) in params {
-            let env_name = format!("COVOPT_{}", name);
+            let env_name = format!("COVOPT_PARAM_{}", name);
             cmd.env(&env_name, val.to_string());
         }
 

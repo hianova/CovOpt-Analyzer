@@ -144,6 +144,13 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 peak_rss
             );
             data.push((n as usize, h));
+            
+            if h == 0 {
+                wlog!(log, "\n> [!WARNING] COVOPT GUIDANCE: HIT COUNT = 0 <");
+                wlog!(log, "The target function was executed 0 times during profiling, but the test succeeded.");
+                wlog!(log, "This often happens to pure math functions due to LLVM Auto-Vectorization or Dead Code Elimination (DCE).");
+                wlog!(log, "=> SUGGESTION: Add `#[inline(never)]` to the target function during testing, and ensure loop variables are wrapped with `std::hint::black_box()`.");
+            }
         } else {
             wlog!(log, "  -> WARNING: No hit count found. Assuming 0.");
             data.push((n as usize, 0));
@@ -212,32 +219,42 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
 
     let mut static_cache_padding = None;
     if args.require_cache_padding {
-        let has_padding =
+        let (has_padding, applicable) =
             static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
         static_cache_padding = Some(has_padding);
-        if has_padding {
-            wlog!(log, "Static Cache Padding: Detected");
+        if applicable {
+            if has_padding {
+                wlog!(log, "Static Cache Padding: Detected");
+            } else {
+                wlog!(
+                    log,
+                    "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target."
+                );
+                success = false;
+            }
         } else {
-            wlog!(
-                log,
-                "\n[ERROR] Missing Cache Padding! Strict mode requires cache alignment for target."
-            );
-            success = false;
+            static_cache_padding = Some(true); // Treat as passed
+            wlog!(log, "Static Cache Padding: Not Applicable (Pure Function)");
         }
     }
 
     let mut static_branch_hints = None;
     if args.require_branch_hints {
-        let has_hints = static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
+        let (has_hints, applicable) = static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
         static_branch_hints = Some(has_hints);
-        if has_hints {
-            wlog!(log, "Static Branch Hints: Detected");
+        if applicable {
+            if has_hints {
+                wlog!(log, "Static Branch Hints: Detected");
+            } else {
+                wlog!(
+                    log,
+                    "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target."
+                );
+                success = false;
+            }
         } else {
-            wlog!(
-                log,
-                "\n[ERROR] Missing Branch Prediction Hints! Strict mode requires likely/unlikely markers for target."
-            );
-            success = false;
+            static_branch_hints = Some(true); // Treat as passed
+            wlog!(log, "Static Branch Hints: Not Applicable (Pure Function)");
         }
     }
 

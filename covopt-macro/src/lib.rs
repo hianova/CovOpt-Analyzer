@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 /// Defines a performance tuning parameter that can be automatically optimized by CovOpt.
 ///
 /// This macro extracts hardcoded magic numbers into dynamically tunable parameters.
@@ -6,7 +8,7 @@
 ///
 /// # Example
 /// ```rust
-/// use covopt_analyzer::covopt_param;
+/// use covopt_macro::covopt_param;
 ///
 /// let cache_size = covopt_param!("cache_size", 1024);
 /// ```

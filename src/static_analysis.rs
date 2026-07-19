@@ -333,9 +333,20 @@ pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
 
 struct CachePaddingVisitor {
     has_padding: bool,
+    has_structs_or_enums: bool,
 }
 
 impl<'ast> Visit<'ast> for CachePaddingVisitor {
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        self.has_structs_or_enums = true;
+        syn::visit::visit_item_struct(self, node);
+    }
+    
+    fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+        self.has_structs_or_enums = true;
+        syn::visit::visit_item_enum(self, node);
+    }
+
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
         if node.path().is_ident("repr")
             && let syn::Meta::List(meta) = &node.meta
@@ -359,23 +370,45 @@ impl<'ast> Visit<'ast> for CachePaddingVisitor {
     }
 }
 
-pub fn analyze_cache_padding(source_file: &Path) -> bool {
+pub fn analyze_cache_padding(source_file: &Path) -> (bool, bool) {
     let Ok(content) = fs::read_to_string(source_file) else {
-        return false;
+        return (false, true);
     };
     if let Ok(ast) = syn::parse_file(&content) {
-        let mut visitor = CachePaddingVisitor { has_padding: false };
+        let mut visitor = CachePaddingVisitor { has_padding: false, has_structs_or_enums: false };
         visitor.visit_file(&ast);
-        return visitor.has_padding;
+        return (visitor.has_padding, visitor.has_structs_or_enums);
     }
-    false
+    (false, true)
 }
 
 struct BranchHintVisitor {
     has_hint: bool,
+    has_control_flow: bool,
 }
 
 impl<'ast> Visit<'ast> for BranchHintVisitor {
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_if(self, node);
+    }
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_match(self, node);
+    }
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_while(self, node);
+    }
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_loop(self, node);
+    }
+
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
         if node.path().is_ident("cold") {
             self.has_hint = true;
@@ -395,16 +428,16 @@ impl<'ast> Visit<'ast> for BranchHintVisitor {
     }
 }
 
-pub fn analyze_branch_hints(source_file: &Path) -> bool {
+pub fn analyze_branch_hints(source_file: &Path) -> (bool, bool) {
     let Ok(content) = fs::read_to_string(source_file) else {
-        return false;
+        return (false, true);
     };
     if let Ok(ast) = syn::parse_file(&content) {
-        let mut visitor = BranchHintVisitor { has_hint: false };
+        let mut visitor = BranchHintVisitor { has_hint: false, has_control_flow: false };
         visitor.visit_file(&ast);
-        return visitor.has_hint;
+        return (visitor.has_hint, visitor.has_control_flow);
     }
-    false
+    (false, true)
 }
 
 struct AerospaceVisitor {
@@ -486,7 +519,11 @@ impl<'ast> Visit<'ast> for AerospaceVisitor {
             && let Some(segment) = expr_path.path.segments.last()
         {
             match segment.ident.to_string().as_str() {
-                "spawn" => self.has_thread_spawn = true,
+                "spawn" => {
+                    if !self.in_test {
+                        self.has_thread_spawn = true;
+                    }
+                }
                 "new"
                     if !self.in_test
                         && expr_path

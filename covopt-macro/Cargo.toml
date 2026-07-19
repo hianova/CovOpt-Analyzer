@@ -1,0 +1,17 @@
+[package]
+name = "covopt-macro"
+version = "1.0.2"
+edition = "2024"
+description = "Lightweight zero-dependency parameter tuning macro for CovOpt-Analyzer"
+license = "MIT"
+repository = "https://github.com/hianova/CovOpt-Analyzer"
+homepage = "https://github.com/hianova/CovOpt-Analyzer"
+readme = "README.md"
+keywords = ["performance", "macro", "tuning", "optimization", "zero-dependency"]
+categories = ["development-tools::profiling", "no-std"]
+authors = ["hianova <hianova@github.com>"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[dependencies]

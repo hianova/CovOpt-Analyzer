@@ -1,6 +1,6 @@
 [package]
 name = "CovOpt-Analyzer"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "A Coverage-Optimized Complexity Analyzer and Auto-Tuning engine for Rust."
 license = "MIT"
@@ -11,10 +11,8 @@ categories = ["development-tools::profiling", "development-tools::testing"]
 exclude = [".covopt/"]
 
 [workspace]
+members = ["covopt-macro"]
 
-[lib]
-name = "covopt_analyzer"
-path = "src/lib.rs"
 
 [[bin]]
 name = "covopt"
