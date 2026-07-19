@@ -2,43 +2,31 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
+fn default_true() -> bool { true }
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct TargetConfig {
     pub test: String,
     pub tests: Option<String>,
-    pub expected: String,
-    pub n_values: String,
-    pub target_file: String,
-    #[serde(default)]
-    pub target_line: Option<u64>,
-    #[serde(default)]
-    pub target_marker: Option<String>,
+    pub expected: Option<String>,
+    pub n_values: Option<String>,
     pub fuzz_iterations: Option<u32>,
     pub mca_cpu: Option<String>,
-    pub require_cache_padding: Option<bool>,
-    pub require_branch_hints: Option<bool>,
-    pub require_aerospace_grade: Option<bool>,
-    pub require_watchdog_timeout: Option<bool>,
-    pub require_stress_test: Option<bool>,
+    #[serde(default = "default_true")]
+    pub require_cache_padding: bool,
+    #[serde(default = "default_true")]
+    pub require_branch_hints: bool,
+    #[serde(default = "default_true")]
+    pub require_aerospace_grade: bool,
+    #[serde(default = "default_true")]
+    pub require_watchdog_timeout: bool,
+    #[serde(default = "default_true")]
+    pub require_stress_test: bool,
     pub polling_threshold: Option<u64>,
 }
 
 impl TargetConfig {
-    pub fn resolve_target_line(&self) -> u64 {
-        if let Some(marker) = &self.target_marker {
-            let file_content = fs::read_to_string(&self.target_file).unwrap_or_else(|_| panic!("Failed to read {}", self.target_file));
-            for (i, line) in file_content.lines().enumerate() {
-                if line.contains(marker) {
-                    return (i + 1) as u64;
-                }
-            }
-            panic!("CovOpt-Analyzer: target_marker '{}' not found in {}", marker, self.target_file);
-        } else if let Some(line) = self.target_line {
-            return line;
-        } else {
-            panic!("CovOpt-Analyzer: either target_line or target_marker must be provided in config");
-        }
-    }
+    // Deprecated methods removed.
 }
 
 #[derive(Deserialize, Debug, Clone)]

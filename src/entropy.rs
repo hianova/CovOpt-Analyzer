@@ -86,8 +86,8 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
             let mut local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir);
             local_runner.executables = runner.executables.clone();
             
-            if let Ok((map, _)) = local_runner.run(n_value, Some(seed), Some(&config.target_file))
-                && let Some(hits) = map.find_hit_count(&config.target_file, config.resolve_target_line())
+            if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
+                && let Some((_, _, _, hits)) = map.find_peak_location()
             {
                 Some(hits as f64)
             } else {
@@ -156,13 +156,15 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     for tc in &test_cases {
         let mut runner = CargoTestRunner::new(tc, &output_dir);
         runner.prepare().unwrap_or_default();
-        if let Ok((map, _)) = runner.run(100, None, None) {
+        if let Ok((map, _)) = runner.run(100, None) {
             let mut lines = std::collections::HashSet::new();
-            for (file, file_cov) in &map.hit_counts {
-                if file.contains(&config.target_file) {
-                    for (&line_number, &count) in file_cov {
-                        if count > 0 {
-                            lines.insert(line_number);
+            if let Some((target_file, _, _, _)) = map.find_peak_location() {
+                for (file, file_cov) in &map.hit_counts {
+                    if file == &target_file {
+                        for (&line_number, &count) in file_cov {
+                            if count > 0 {
+                                lines.insert(line_number);
+                            }
                         }
                     }
                 }

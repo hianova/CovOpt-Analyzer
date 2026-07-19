@@ -1,4 +1,3 @@
-
 # CovOpt Optimization & Tuning Rules (Google Antigravity)
 
 **Usage**: AI Agent instructions for performance verification and parameter tuning.
@@ -33,4 +32,3 @@
 - `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
-

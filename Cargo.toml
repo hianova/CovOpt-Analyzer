@@ -1,6 +1,6 @@
 [package]
 name = "CovOpt-Analyzer"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 
 [workspace]
@@ -25,3 +25,11 @@ rand = "0.10.2"
 regex = "1.10.0"
 quote = "1.0"
 rayon = "1.10.0"
+
+[profile.dev]
+incremental = false
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false

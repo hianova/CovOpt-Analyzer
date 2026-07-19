@@ -103,6 +103,24 @@ impl CoverageMap {
         None
     }
 
+    /// Finds the location (file, line, symbol, hits) with the maximum hit count across all files.
+    pub fn find_peak_location(&self) -> Option<(String, u64, String, u64)> {
+        let mut peak_hits = 0;
+        let mut peak_loc = None;
+
+        for (file, file_hits) in &self.hit_counts {
+            for (line, &hits) in file_hits {
+                if hits > peak_hits {
+                    peak_hits = hits;
+                    if let Some(sym) = self.symbol_map.get(file).and_then(|m| m.get(line)) {
+                        peak_loc = Some((file.clone(), *line, sym.clone(), hits));
+                    }
+                }
+            }
+        }
+        peak_loc
+    }
+
     /// Calculate the coverage rate for a specific function globally.
     /// Returns (executed_lines, total_lines).
     pub fn get_function_coverage(&self, function_name: &str) -> Option<(u64, u64)> {

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use syn::{Item, ItemImpl};
+use syn::Item;
 
 #[derive(Debug, Clone)]
 pub struct Objective {

@@ -151,16 +151,16 @@ impl CargoTestRunner {
         Ok(())
     }
 
-    pub fn run(&self, n: usize, seed: Option<u64>, target_file: Option<&str>) -> Result<(CoverageMap, u64), String> {
+    pub fn run(&self, n: usize, seed: Option<u64>) -> Result<(CoverageMap, u64), String> {
         if !self.output_dir.exists() {
             fs::create_dir_all(&self.output_dir)
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        let t0 = std::time::Instant::now();
+        let _t0 = std::time::Instant::now();
         let executables = self.executables.as_ref().ok_or("Not prepared")?;
         
-        let t1 = std::time::Instant::now();
+        let _t1 = std::time::Instant::now();
 
         if executables.is_empty() {
             return Err("No test executables found".to_string());
@@ -178,7 +178,7 @@ impl CargoTestRunner {
             executables.clone()
         };
 
-        let lcov_str = self.export_lcov(&target_executables, n, target_file)?;
+        let lcov_str = self.export_lcov(&target_executables, n)?;
         let t5 = std::time::Instant::now();
 
         let map = CoverageMap::from_lcov(&lcov_str)?;
@@ -355,7 +355,7 @@ impl CargoTestRunner {
         Ok(())
     }
 
-    fn export_lcov(&self, executables: &[PathBuf], n: usize, target_file: Option<&str>) -> Result<String, String> {
+    fn export_lcov(&self, executables: &[PathBuf], n: usize) -> Result<String, String> {
         let profdata = self.output_dir.join(format!("covopt_{}.profdata", n));
 
         let mut cmd = Command::new("llvm-cov");
@@ -371,9 +371,7 @@ impl CargoTestRunner {
             cmd.arg("-object").arg(exe);
         }
 
-        if let Some(tf) = target_file {
-            cmd.arg(tf);
-        }
+
 
         let output = cmd
             .output()

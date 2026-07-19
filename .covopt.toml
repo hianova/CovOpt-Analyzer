@@ -1,11 +1,11 @@
 agent_deterrence = true
 
 [[target]]
-test = "tests::test_spin_mutex_heavy_contention"
-expected = "O1"
-n_values = "10,50,100"
-target_file = "tests/spin_deadlock.rs"
-target_line = 84
-require_cache_padding = false
-require_branch_hints = false
-require_aerospace_grade = false
+test = "my_benchmark_test"
+expected = "O(1)"
+n_values = "100,500,1000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = true
+require_watchdog_timeout = true
+require_stress_test = true
