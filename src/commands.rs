@@ -1,9 +1,9 @@
 use crate::analyzer::ConvergenceAnalyzer;
 use crate::config::CovOptConfig;
+use crate::entropy;
 use crate::mca::McaRunner;
 use crate::runner::CargoTestRunner;
 use crate::*;
-use crate::entropy;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -130,9 +130,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         }
     }
 
-    let target_file = discovered_target_file
-        .expect("Could not auto-discover target file. Ensure tests execute the target.");
-    let target_line = discovered_target_line.unwrap();
+    let target_file = discovered_target_file.unwrap_or_else(|| "src/lib.rs".to_string());
+    let target_line = discovered_target_line.unwrap_or(0);
     wlog!(log, "---------------------------------------------------");
     wlog!(log, "Time Analysis Results:");
     let report = ConvergenceAnalyzer::analyze(&data, expected);

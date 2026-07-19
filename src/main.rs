@@ -1,7 +1,13 @@
 pub mod analyzer;
+pub mod auto_fixer;
+pub mod auto_harness;
+pub mod auto_refactor;
+pub mod auto_simd;
+pub mod ci;
 pub mod commands;
 pub mod config;
 pub mod coverage;
+pub mod dashboard;
 pub mod entropy;
 pub mod explore;
 pub mod harden;
@@ -9,10 +15,12 @@ pub mod heuristic;
 pub mod mca;
 pub mod optimizer;
 pub mod parameter_optimizer;
+pub mod pgo_injector;
 pub mod profiler;
 pub mod runner;
-pub mod static_analysis;
 pub mod scanner;
+pub mod static_analysis;
+pub mod struct_layout;
 
 use clap::{Parser, Subcommand};
 
@@ -46,9 +54,75 @@ enum Commands {
 
     /// Performance Parameter Auto-Tuning & Optimization
     Optimize(OptimizeArgs),
-    
+
     /// Scan Rust files for hardcoded magic numbers
     ScanMagic(ScanMagicArgs),
+
+    /// Generate fuzzing harnesses for public functions
+    #[command(name = "generate-fuzz")]
+    GenerateFuzz(GenerateFuzzArgs),
+
+    /// Inject dynamic PGO (likely/unlikely) probes based on coverage
+    #[command(name = "pgo-inject")]
+    PgoInject(PgoInjectArgs),
+
+    /// Tune struct memory layouts for cache efficiency
+    #[command(name = "tune-layout")]
+    TuneLayout(TuneLayoutArgs),
+
+    /// Generate an HTML dashboard report
+    #[command(name = "report")]
+    Report(ReportArgs),
+
+    /// Scan for SIMD auto-vectorization opportunities
+    #[command(name = "vectorize")]
+    Vectorize(VectorizeArgs),
+
+    /// Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N))
+    #[command(name = "ai-refactor")]
+    AiRefactor(AiRefactorArgs),
+
+    /// Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize)
+    Ci(CiArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct GenerateFuzzArgs {
+    #[arg(long, default_value = "src")]
+    pub target_dir: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct PgoInjectArgs {
+    #[arg(long, default_value = "src")]
+    pub target_dir: String,
+
+    #[arg(long, default_value_t = 1000)]
+    pub threshold: u64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct TuneLayoutArgs {
+    #[arg(long, default_value = "src")]
+    pub target_dir: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ReportArgs {
+    #[arg(long, default_value = "target/covopt")]
+    pub output_dir: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct VectorizeArgs {
+    #[arg(long, default_value = "src")]
+    pub target_dir: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct AiRefactorArgs {
+    #[arg(long, default_value = "src")]
+    pub target_dir: String,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -125,6 +199,17 @@ pub struct OptimizeArgs {
     /// Similarity threshold for perfect resonance (for explore, 0.0 to 1.0)
     #[arg(long, default_value_t = 0.99)]
     pub threshold: f64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CiArgs {
+    /// Skip the hardening (fuzz/mutate) step
+    #[arg(long, default_value_t = false)]
+    pub skip_harden: bool,
+
+    /// Fail the CI if any step produces a non-perfect result
+    #[arg(long, default_value_t = false)]
+    pub strict: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -242,6 +327,56 @@ fn main() {
                 opt.run();
             } else {
                 eprintln!("Optimize: Please specify either --explore or --params <PARAMS>.");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::GenerateFuzz(args)) => {
+            let engine = auto_harness::AutoHarness::new(&args.target_dir);
+            if let Err(e) = engine.generate() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::PgoInject(args)) => {
+            let cov_map = coverage::CoverageMap::default();
+            let engine = pgo_injector::PgoInjector::new(&args.target_dir, cov_map, args.threshold);
+            if let Err(e) = engine.run() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::TuneLayout(args)) => {
+            let engine = struct_layout::StructLayoutTuner::new(&args.target_dir);
+            if let Err(e) = engine.run() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Report(args)) => {
+            let engine = dashboard::DashboardGenerator::new(&args.output_dir);
+            if let Err(e) = engine.generate() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Vectorize(args)) => {
+            let engine = auto_simd::AutoSimd::new(&args.target_dir);
+            if let Err(e) = engine.run() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::AiRefactor(args)) => {
+            let engine = auto_refactor::AutoRefactor::new(&args.target_dir);
+            if let Err(e) = engine.run() {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Ci(args)) => {
+            let config = config::CovOptConfig::load(".covopt.toml").expect("Failed to load .covopt.toml");
+            if let Err(e) = ci::run_pipeline(config, &args) {
+                eprintln!("CI Pipeline failed: {}", e);
                 std::process::exit(1);
             }
         }

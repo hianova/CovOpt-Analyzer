@@ -112,9 +112,13 @@ impl CoverageMap {
             for (line, &hits) in file_hits {
                 if hits > peak_hits {
                     peak_hits = hits;
-                    if let Some(sym) = self.symbol_map.get(file).and_then(|m| m.get(line)) {
-                        peak_loc = Some((file.clone(), *line, sym.clone(), hits));
-                    }
+                    let sym_str = self
+                        .symbol_map
+                        .get(file)
+                        .and_then(|m| m.get(line))
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    peak_loc = Some((file.clone(), *line, sym_str, hits));
                 }
             }
         }

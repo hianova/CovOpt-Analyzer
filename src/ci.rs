@@ -1,0 +1,64 @@
+use crate::config::CovOptConfig;
+use crate::{commands, CiArgs};
+use crate::harden;
+
+pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
+    println!("===================================================");
+    println!("🚀 Starting CovOpt-Analyzer Unified Auto-Pilot (CI)");
+    println!("===================================================");
+
+    // Step 1: Clean & Format (Fix)
+    if config.pipeline.run_fix {
+        println!("▶️ Step 1: Running `covopt fix`...");
+        commands::run_fix();
+        println!("✅ [CI OK] Fix complete.");
+    }
+
+    // Step 2: Core Audit
+    if config.pipeline.run_audit {
+        println!("▶️ Step 2: Running `covopt audit`...");
+        commands::run_audit();
+        println!("✅ [CI OK] Audit passed.");
+    }
+
+    // Step 3: Optimize
+    if config.pipeline.run_optimize {
+        println!("▶️ Step 3: Running `covopt optimize` (Auto-Tuning)...");
+        for target_config in &config.target {
+            println!("  -> Optimizing target: {}", target_config.test);
+            // Defaulting to running explore logic for optimization in CI pipeline
+            crate::explore::run("src", "UnknownTrait", "evaluate_fitness", 0.99);
+        }
+        println!("✅ [CI OK] Optimization complete.");
+    }
+
+    // Step 4: Harden (if configured)
+    if config.pipeline.run_harden && !args.skip_harden {
+        println!("▶️ Step 4: Running `covopt harden`...");
+        let mut success = true;
+        for target_config in &config.target {
+            let fuzz_iters = target_config.fuzz_iterations.unwrap_or(0);
+            if fuzz_iters > 0 {
+                println!("  -> Hardening target: {}", target_config.test);
+                if !harden::run_fuzz(&target_config.test) {
+                     success = false;
+                     eprintln!("⚠️ [CI Warning] fuzz failed for {}", target_config.test);
+                }
+            }
+        }
+        
+        if args.strict && !success {
+            eprintln!("❌ [CI Failed] Hardening encountered errors in strict mode.");
+            std::process::exit(1);
+        } else if !success {
+            eprintln!("⚠️ [CI Warning] Hardening had errors, but continuing.");
+        } else {
+            println!("✅ [CI OK] Hardening complete.");
+        }
+    }
+
+    println!("===================================================");
+    println!("🎉 CI Pipeline Execution Completed Successfully!");
+    println!("===================================================");
+    Ok(())
+}

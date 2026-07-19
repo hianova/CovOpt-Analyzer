@@ -17,7 +17,8 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
                 if let Ok(val) = value_str.parse::<i64>() {
                     // Ignore common safe numbers
                     if val != 0 && val != 1 && val != 2 && val != -1 {
-                        self.found_magics.push((node.lit.span().start(), value_str.to_string()));
+                        self.found_magics
+                            .push((node.lit.span().start(), value_str.to_string()));
                     }
                 }
             }
@@ -25,8 +26,11 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
                 let value_str = lit_float.base10_digits();
                 if let Ok(val) = value_str.parse::<f64>() {
                     // Ignore 0.0, 1.0, etc.
-                    if (val.abs() - 0.0).abs() > f64::EPSILON && (val.abs() - 1.0).abs() > f64::EPSILON {
-                        self.found_magics.push((node.lit.span().start(), value_str.to_string()));
+                    if (val.abs() - 0.0).abs() > f64::EPSILON
+                        && (val.abs() - 1.0).abs() > f64::EPSILON
+                    {
+                        self.found_magics
+                            .push((node.lit.span().start(), value_str.to_string()));
                     }
                 }
             }
@@ -85,7 +89,11 @@ fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
             if path.is_dir() {
                 // Ignore common non-source directories
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                if file_name != "target" && file_name != ".git" && file_name != ".agents" && !file_name.starts_with('.') {
+                if file_name != "target"
+                    && file_name != ".git"
+                    && file_name != ".agents"
+                    && !file_name.starts_with('.')
+                {
                     collect_rs_files(&path, files);
                 }
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {

@@ -7,7 +7,7 @@
 /// # Example
 /// ```rust
 /// use covopt_analyzer::covopt_param;
-/// 
+///
 /// let cache_size = covopt_param!("cache_size", 1024);
 /// ```
 #[macro_export]

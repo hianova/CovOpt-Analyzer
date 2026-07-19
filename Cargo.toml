@@ -2,14 +2,13 @@
 name = "CovOpt-Analyzer"
 version = "1.0.0"
 edition = "2024"
+exclude = [".covopt/"]
 
 [workspace]
 
 [lib]
 name = "covopt_analyzer"
 path = "src/lib.rs"
-
-exclude = [".covopt/"]
 
 [[bin]]
 name = "covopt"
@@ -23,12 +22,13 @@ rustc-demangle = "0.1.24"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 toml = "1.1.2"
-syn = { version = "2.0", features = ["full", "extra-traits", "visit"] }
+syn = { version = "2.0", features = ["full", "extra-traits", "visit", "visit-mut"] }
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 rand = "0.10.2"
 regex = "1.10.0"
 quote = "1.0"
 rayon = "1.10.0"
+anyhow = "1.0.104"
 
 [profile.dev]
 incremental = false

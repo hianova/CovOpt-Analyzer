@@ -6,6 +6,33 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct PipelineConfig {
+    #[serde(default = "default_true")]
+    pub run_fix: bool,
+    #[serde(default = "default_true")]
+    pub run_audit: bool,
+    #[serde(default = "default_false")]
+    pub run_optimize: bool,
+    #[serde(default = "default_false")]
+    pub run_harden: bool,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            run_fix: true,
+            run_audit: true,
+            run_optimize: false,
+            run_harden: false,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct TargetConfig {
     pub test: String,
@@ -35,6 +62,8 @@ impl TargetConfig {
 pub struct CovOptConfig {
     #[serde(default)]
     pub target: Vec<TargetConfig>,
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
     pub agent_deterrence: Option<bool>,
 }
 

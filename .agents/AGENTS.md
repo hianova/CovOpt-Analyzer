@@ -35,8 +35,8 @@ RTK filters and compresses command output before it reaches the LLM context, sav
 **Usage**: AI Agent instructions for performance verification and parameter tuning.
 
 ## Rule 1: Zero-Entropy Tuning
-- **NEVER** use hardcoded magical numbers for caching thresholds, buffer sizes, or critical performance parameters.
-- **ALWAYS** use the `covopt_param!` macro to define these parameters. You must import it by adding `covopt-analyzer` to your dependencies and using `use covopt_analyzer::covopt_param;`. Do **NOT** write the macro yourself.
+- **NEVER** leave untuned magic numbers for caching thresholds, buffer sizes, or critical performance parameters.
+- **ALWAYS** use `covopt optimize` to auto-tune these parameters. The optimizer will automatically scan for magic numbers, inject runtime exploration variables via a single-compile Mega-Batch architecture, and overwrite the source code directly with the optimal values.
 - Before submitting performance-related code, you MUST run `covopt audit` and ensure the Entropy Score is `0.0`. If it is not, use `covopt optimize` or `covopt optimize --explore` to converge the parameters.
 
 ## Rule 2: Anti-DCE in Benchmarks
@@ -48,10 +48,10 @@ RTK filters and compresses command output before it reaches the LLM context, sav
 - **ALWAYS** use QSBR (Quiescent State Based Reclamation) or Thread Local Storage (TLS) for thread-safe memory and state management.
 
 ## Rule 4: Strict Clippy Cleanliness
-- All macro-generated code from `covopt_param!` must be strictly typed. **DO NOT** use `#[allow(...)]` to ignore `as u8` or `as u16` cast warnings. Fix the underlying type inference instead.
+- All code must be strictly typed. **DO NOT** use `#[allow(...)]` to ignore `as u8` or `as u16` cast warnings. Fix the underlying type inference instead.
 
-## Rule 5: No Magic Numbers
-- All magic numbers must be uniformly defined using `covopt_parm!`.
+## Rule 5: Auto-Tuned Magic Numbers
+- All magic numbers must be auto-tuned using `covopt optimize` and overwritten by the optimizer directly.
 
 ## Available Commands (CovOpt-Analyzer)
 - `covopt audit`: Fast, low-entropy verification checking with quiet checklist output.

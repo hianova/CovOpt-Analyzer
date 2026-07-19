@@ -56,10 +56,10 @@ mod tests {
         let mutex = Arc::new(SpinMutex::new(0));
         let mut handles = vec![];
 
-        for _ in 0..n {
+        for _ in std::hint::black_box(0..n) {
             let m = mutex.clone();
             handles.push(std::thread::spawn(move || {
-                for _ in 0..1_000 {
+                for _ in std::hint::black_box(0..1_000) {
                     let _guard = m.lock();
                     black_box(1);
                 }
@@ -68,7 +68,7 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            for handle in handles {
+            for handle in std::hint::black_box(handles) {
                 handle.join().unwrap();
             }
             tx.send(()).unwrap();

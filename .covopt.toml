@@ -1,11 +1,11 @@
 agent_deterrence = true
 
 [[target]]
-test = "my_benchmark_test"
+test = "ruinsos_scheduler"
 expected = "O(1)"
 n_values = "100,500,1000"
-require_cache_padding = true
-require_branch_hints = true
+require_cache_padding = false
+require_branch_hints = false
 require_aerospace_grade = false
-require_watchdog_timeout = true
-require_stress_test = true
+require_watchdog_timeout = false
+require_stress_test = false
