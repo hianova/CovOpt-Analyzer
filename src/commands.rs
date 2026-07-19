@@ -603,6 +603,13 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 - `covopt optimize`: Performance Parameter Auto-Tuning & Optimization.
 - `covopt scan-magic`: Scan Rust files for hardcoded magic numbers.
 - `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
+- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize -> Harden).
+- `covopt generate-fuzz`: Generate fuzzing harnesses for public functions.
+- `covopt pgo-inject`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
+- `covopt tune-layout`: Tune struct memory layouts for cache efficiency.
+- `covopt report`: Generate an HTML dashboard report.
+- `covopt vectorize`: Scan for SIMD auto-vectorization opportunities.
+- `covopt ai-refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
 "#;
@@ -615,24 +622,23 @@ pub fn init_config(args: crate::InitArgs) {
         std::process::exit(1);
     }
     let config_path = std::path::PathBuf::from(".covopt.toml");
-    if config_path.exists() {
-        eprintln!("CovOpt-Analyzer: .covopt.toml already exists in the current directory.");
-        std::process::exit(1);
-    }
-
-    use std::io::Write;
-    let require_aerospace = if args.yes {
-        false
+    let has_config = config_path.exists();
+    if has_config {
+        println!("CovOpt-Analyzer: .covopt.toml already exists. Skipping config creation, but will ensure rules are injected.");
     } else {
-        print!("Enable Aerospace Grade checks? [y/N]: ");
-        std::io::stdout().flush().unwrap();
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        input.trim().eq_ignore_ascii_case("y")
-    };
+        use std::io::Write;
+        let require_aerospace = if args.yes {
+            false
+        } else {
+            print!("Enable Aerospace Grade checks? [y/N]: ");
+            std::io::stdout().flush().unwrap();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+            input.trim().eq_ignore_ascii_case("y")
+        };
 
-    let default_config = format!(
-        r#"agent_deterrence = true
+        let default_config = format!(
+            r#"agent_deterrence = true
 
 [[target]]
 test = "my_benchmark_test"
@@ -644,14 +650,15 @@ require_aerospace_grade = {}
 require_watchdog_timeout = true
 require_stress_test = true
 "#,
-        require_aerospace
-    );
+            require_aerospace
+        );
 
-    if let Err(e) = std::fs::write(&config_path, default_config) {
-        eprintln!("Failed to write .covopt.toml: {}", e);
-        std::process::exit(1);
+        if let Err(e) = std::fs::write(&config_path, default_config) {
+            eprintln!("Failed to write .covopt.toml: {}", e);
+            std::process::exit(1);
+        }
+        println!("Successfully initialized .covopt.toml. Please edit it to match your target.");
     }
-    println!("Successfully initialized .covopt.toml. Please edit it to match your target.");
 
     // Append to .gitignore
     if let Ok(mut content) = std::fs::read_to_string(".gitignore") {
@@ -705,19 +712,34 @@ require_stress_test = true
 
         let agents_md = agents_dir.join("AGENTS.md");
         let current_agents_md = std::fs::read_to_string(&agents_md).unwrap_or_default();
-        if !current_agents_md.contains("CovOpt Optimization & Tuning Rules") {
-            let mut new_agents_md = current_agents_md;
-            if !new_agents_md.ends_with('\n') && !new_agents_md.is_empty() {
-                new_agents_md.push('\n');
-            }
-            new_agents_md.push('\n');
-            new_agents_md.push_str(COVOPT_AGENT_RULES);
-            new_agents_md.push('\n');
-            if let Err(e) = std::fs::write(&agents_md, new_agents_md) {
-                eprintln!("Failed to append to {:?}: {}", agents_md, e);
+        
+        // Remove the old block if it exists
+        let mut new_agents_md = current_agents_md.clone();
+        if let Some(start_idx) = new_agents_md.find("# CovOpt Optimization & Tuning Rules (Google Antigravity)") {
+            if let Some(end_idx) = new_agents_md[start_idx..].find("# ") {
+                if end_idx > 0 {
+                    // There's another rule block after this one
+                    new_agents_md.replace_range(start_idx..(start_idx + end_idx), "");
+                } else {
+                    // It's the only/last rule block
+                    new_agents_md.truncate(start_idx);
+                }
             } else {
-                println!("Appended CovOpt rules to {:?}.", agents_md);
+                new_agents_md.truncate(start_idx);
             }
+        }
+
+        if !new_agents_md.ends_with('\n') && !new_agents_md.is_empty() {
+            new_agents_md.push('\n');
+        }
+        new_agents_md.push('\n');
+        new_agents_md.push_str(COVOPT_AGENT_RULES);
+        new_agents_md.push('\n');
+        
+        if let Err(e) = std::fs::write(&agents_md, new_agents_md) {
+            eprintln!("Failed to update {:?}: {}", agents_md, e);
+        } else {
+            println!("Updated CovOpt rules in {:?}.", agents_md);
         }
     }
 }

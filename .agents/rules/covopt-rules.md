@@ -31,5 +31,12 @@
 - `covopt optimize`: Performance Parameter Auto-Tuning & Optimization.
 - `covopt scan-magic`: Scan Rust files for hardcoded magic numbers.
 - `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
+- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize -> Harden).
+- `covopt generate-fuzz`: Generate fuzzing harnesses for public functions.
+- `covopt pgo-inject`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
+- `covopt tune-layout`: Tune struct memory layouts for cache efficiency.
+- `covopt report`: Generate an HTML dashboard report.
+- `covopt vectorize`: Scan for SIMD auto-vectorization opportunities.
+- `covopt ai-refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
