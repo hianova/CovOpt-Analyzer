@@ -82,10 +82,13 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
         .into_par_iter()
         .filter_map(|i| {
             let seed = i as u64 * 1337 + 1000;
-            let iter_dir = tempfile::tempdir().expect("Failed to create tempdir").path().to_path_buf();
+            let iter_dir = tempfile::tempdir()
+                .expect("Failed to create tempdir")
+                .path()
+                .to_path_buf();
             let mut local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir);
             local_runner.executables = runner.executables.clone();
-            
+
             if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
                 && let Some((_, _, _, hits)) = map.find_peak_location()
             {
@@ -151,7 +154,10 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     }
 
     let mut covered_lines_per_test: Vec<std::collections::HashSet<u64>> = Vec::new();
-    let output_dir = tempfile::tempdir().expect("Failed to create tempdir").path().to_path_buf();
+    let output_dir = tempfile::tempdir()
+        .expect("Failed to create tempdir")
+        .path()
+        .to_path_buf();
 
     for tc in &test_cases {
         let mut runner = CargoTestRunner::new(tc, &output_dir);

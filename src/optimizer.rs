@@ -93,11 +93,8 @@ impl DiscreteDiffusionEngine {
         }
 
         // RAW, WAR, WAW dependencies
-        for i in 0..metas.len() {
-            let a = &metas[i];
-            for j in (i + 1)..metas.len() {
-                let b = &metas[j];
-
+        for (i, a) in metas.iter().enumerate() {
+            for b in metas.iter().skip(i + 1) {
                 let mut dependent = false;
 
                 // Memory ordering
@@ -230,7 +227,7 @@ impl DiscreteDiffusionEngine {
         canvas[0].iter().map(|(_, s)| s.clone()).collect()
     }
 
-    fn mutate_asm(candidate: &mut Vec<(usize, String)>, noise_level: f64, mut seed: usize) {
+    fn mutate_asm(candidate: &mut [(usize, String)], noise_level: f64, mut seed: usize) {
         let num_mutations = (candidate.len() as f64 * noise_level * 0.1).ceil() as usize;
 
         let rand = |s: &mut usize, max: usize| -> usize {

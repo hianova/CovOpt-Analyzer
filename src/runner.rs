@@ -159,7 +159,7 @@ impl CargoTestRunner {
 
         let _t0 = std::time::Instant::now();
         let executables = self.executables.as_ref().ok_or("Not prepared")?;
-        
+
         let _t1 = std::time::Instant::now();
 
         if executables.is_empty() {
@@ -184,7 +184,10 @@ impl CargoTestRunner {
         let map = CoverageMap::from_lcov(&lcov_str)?;
         let t6 = std::time::Instant::now();
 
-        println!("[Profile] execute_tests (incl. OS process spawn overhead): {:?}", t3.duration_since(t2));
+        println!(
+            "[Profile] execute_tests (incl. OS process spawn overhead): {:?}",
+            t3.duration_since(t2)
+        );
         println!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
         println!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
         println!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
@@ -371,8 +374,6 @@ impl CargoTestRunner {
             cmd.arg("-object").arg(exe);
         }
 
-
-
         let output = cmd
             .output()
             .map_err(|e| format!("Failed to run llvm-cov export: {}", e))?;
@@ -410,13 +411,12 @@ impl CargoTestRunner {
         for target_dir in possible_targets {
             if let Ok(entries) = fs::read_dir(target_dir) {
                 for entry in entries.flatten() {
-                    if let Some(ext) = entry.path().extension() {
-                        if ext == "s" {
-                            if let Ok(content) = fs::read_to_string(entry.path()) {
-                                all_asm.push_str(&content);
-                                all_asm.push('\n');
-                            }
-                        }
+                    if let Some(ext) = entry.path().extension()
+                        && ext == "s"
+                        && let Ok(content) = fs::read_to_string(entry.path())
+                    {
+                        all_asm.push_str(&content);
+                        all_asm.push('\n');
                     }
                 }
             }

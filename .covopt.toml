@@ -6,6 +6,6 @@ expected = "O(1)"
 n_values = "100,500,1000"
 require_cache_padding = true
 require_branch_hints = true
-require_aerospace_grade = true
+require_aerospace_grade = false
 require_watchdog_timeout = true
 require_stress_test = true

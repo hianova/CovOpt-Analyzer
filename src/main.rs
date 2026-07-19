@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod commands;
 pub mod config;
 pub mod coverage;
 pub mod entropy;
@@ -11,7 +12,6 @@ pub mod parameter_optimizer;
 pub mod profiler;
 pub mod runner;
 pub mod static_analysis;
-pub mod commands;
 
 use clap::{Parser, Subcommand};
 
@@ -19,20 +19,7 @@ use analyzer::Complexity;
 
 #[derive(Parser, Debug)]
 #[command(name = "covopt")]
-#[command(
-    author,
-    version,
-    about = "Coverage-based Complexity & Safety Analyzer",
-    long_about = "RECOMMENDED WORKFLOWS:\n\n\
-  🧑 [FOR HUMANS]\n\
-    - fuzz / mutate      : Harden your test coverage manually.\n\
-    - profile            : Diagnose CPU bottlenecks and visualize with flamegraphs in the browser.\n\
-    - sanitize --auto-fix: Interactively catch and repair Use-After-Free/Data Races using LLMs.\n\n\
-  🤖 [FOR AI AGENTS]\n\
-    - audit              : Fast, low-entropy verification checking with quiet checklist output.\n\
-    - profile            : Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.\n\
-    - sanitize --auto-fix: Automate self-healing ReAct compilation loops to auto-patch memory bugs."
-)]
+#[command(author, version, about = "Coverage-based Complexity & Safety Analyzer")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -55,7 +42,7 @@ enum Commands {
     Profile(ProfileArgs),
     /// Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers)
     Harden(HardenArgs),
-    
+
     /// Performance Parameter Auto-Tuning & Optimization
     Optimize(OptimizeArgs),
 }
@@ -126,7 +113,6 @@ pub struct OptimizeArgs {
     pub threshold: f64,
 }
 
-
 #[derive(clap::Args, Debug, Clone)]
 pub struct ProfileArgs {
     /// The name of the test to profile
@@ -155,7 +141,6 @@ pub struct RunArgs {
     /// Comma-separated list of N values (e.g. 100,1000,10000)
     #[arg(short, long)]
     pub n_values: Option<String>,
-
 
     /// Optional LLVM-MCA CPU target (e.g. apple-m1, skylake)
     #[arg(long)]
@@ -205,23 +190,19 @@ fn main() {
         Some(Commands::Harden(args)) => {
             let mut success = true;
             let run_all = !args.mutate && !args.fuzz && !args.sanitize;
-            
-            if args.sanitize || run_all {
-                if !harden::run_sanitizer(&args.test, &args.san_type, args.auto_fix) {
-                    success = false;
-                }
+
+            if (args.sanitize || run_all)
+                && !harden::run_sanitizer(&args.test, &args.san_type, args.auto_fix)
+            {
+                success = false;
             }
-            if (args.mutate || run_all) && success {
-                if !harden::run_mutants(&args.test) {
-                    success = false;
-                }
+            if (args.mutate || run_all) && success && !harden::run_mutants(&args.test) {
+                success = false;
             }
-            if (args.fuzz || run_all) && success {
-                if !harden::run_fuzz(&args.test) {
-                    success = false;
-                }
+            if (args.fuzz || run_all) && success && !harden::run_fuzz(&args.test) {
+                success = false;
             }
-            
+
             if !success {
                 std::process::exit(1);
             }
@@ -233,13 +214,10 @@ fn main() {
         }
         Some(Commands::Optimize(args)) => {
             if args.explore {
-                let trait_name = args.trait_name.expect("--trait-name is required for explore");
-                explore::run(
-                    &args.src,
-                    &trait_name,
-                    &args.method_name,
-                    args.threshold,
-                );
+                let trait_name = args
+                    .trait_name
+                    .expect("--trait-name is required for explore");
+                explore::run(&args.src, &trait_name, &args.method_name, args.threshold);
             } else if let Some(params) = &args.params {
                 let opt = parameter_optimizer::ParameterOptimizer::new(
                     args.test,

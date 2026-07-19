@@ -24,14 +24,14 @@ Instead of relying on fragile execution time measurements (like `criterion` or `
 Depending on whether you are running `covopt` manually in a terminal, or configuring it for an autonomous coding agent (like Google Antigravity), we recommend two distinct workflow pipelines:
 
 ### 🧑 For Humans (Interactive Development)
-- **Harden & Secure (`covopt fuzz` / `covopt mutate`)**: Interactively fuzz your functions or inject mutations to find loopholes in test assertions.
+- **Harden & Secure (`covopt harden`)**: Interactively fuzz your functions, inject mutations, or run sanitizers to find loopholes in test assertions.
 - **Visualize Hotspots (`covopt profile --tool flamegraph`)**: Profile your CPU hotspots and analyze lock contention using interactive flamegraphs.
-- **Memory Fix (`covopt sanitize --auto-fix`)**: Enable local LLM feedback loops to automatically suggest patches for Use-After-Free or data races.
+- **Parameter Optimization (`covopt optimize`)**: Auto-tune performance parameters to find the most optimal configuration.
 
 ### 🤖 For AI Agents (Automated Pipelines & CI)
 - **Clutter-Free Checks (`covopt audit`)**: Runs all checks defined in `.covopt.toml` compactly. Suppresses noisy cargo build logs and intermediate test execution lines to keep agent context clean. Only reports anomalies or entropy threshold violations.
-- **CPU Optimization (`covopt profile`)**: Automatically parses the generated `flamegraph.svg` into clean, text-based CPU hotspots and statistics, serving as direct actionable input for AI agents to locate and optimize hot paths without needing a browser visualizer.
-- **Self-Healing Loop (`covopt sanitize --auto-fix`)**: Hook `covopt` with the agent's LLM environment. If the sanitizer catches a crash, the CLI automatically feeds the crash logs and offending source lines back to the LLM to auto-repair, compiling up to 3 times to guarantee memory safety.
+- **CPU Optimization (`covopt profile`)**: Automatically parses the generated `flamegraph.svg` into clean, text-based CPU hotspots and statistics.
+- **Self-Healing Loop (`covopt harden --sanitize --auto-fix`)**: Hook `covopt` with the agent's LLM environment to automatically patch memory bugs.
 
 ---
 
@@ -80,7 +80,7 @@ In `my_crate`, create a simple test that reads `COVOPT_N`:
 pub fn process_data(n: usize) {
     let mut sum = 0;
     for i in 0..n {
-        // We want to track the hit count of this line! (e.g., line 7)
+        // CovOpt-Analyzer will automatically discover and track the most heavily hit line!
         // Use black_box to prevent Dead Code Elimination
         sum += std::hint::black_box(i);
     }
@@ -107,12 +107,10 @@ mod tests {
 Navigate to your `my_crate` directory and run CovOpt-Analyzer:
 
 ```bash
-covopt \
+covopt audit \
   --test test_process_complexity \
   --expected ON \
   --n-values "1000,5000,10000" \
-  --target-file src/lib.rs \
-  --target-line 7 \
   --mca-cpu apple-m1
 ```
 
@@ -121,7 +119,7 @@ The tool will automatically handle all compilation and profiling, eventually out
 
 ```text
 Starting CovOpt Analysis for test 'test_process_complexity'...
-Target: src/lib.rs:6
+[Auto-Discovery] Found peak complexity target at src/lib.rs:85
 Expected Complexity: ON
 Testing N values: [1000, 5000, 10000]
 ---------------------------------------------------
@@ -161,8 +159,11 @@ agent_deterrence = true
 test = "test_process_complexity"
 expected = "ON"
 n_values = "100,500,1000"
-target_file = "src/lib.rs"
-target_line = 7
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = true
+require_watchdog_timeout = true
+require_stress_test = true
 ```
 
 Then simply run:

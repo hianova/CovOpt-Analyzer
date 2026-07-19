@@ -31,61 +31,58 @@ pub fn run(src_dir: &str, trait_name: &str, method_name: &str, threshold: f64) {
 
         if let Ok(ast) = syn::parse_file(&content) {
             for item in ast.items {
-                if let Item::Impl(impl_item) = item {
-                    if let Some((_, path, _)) = &impl_item.trait_ {
-                        if path.segments.last().map(|s| s.ident.to_string())
-                            == Some(trait_name.to_string())
+                if let Item::Impl(impl_item) = item
+                    && let Some((_, path, _)) = &impl_item.trait_
+                    && path.segments.last().map(|s| s.ident.to_string())
+                        == Some(trait_name.to_string())
+                {
+                    let struct_name = if let syn::Type::Path(type_path) = &*impl_item.self_ty {
+                        type_path
+                            .path
+                            .segments
+                            .last()
+                            .map(|s| s.ident.to_string())
+                            .unwrap_or_default()
+                    } else {
+                        continue;
+                    };
+
+                    let mut method_tokens = HashMap::new();
+                    let mut found_method = false;
+
+                    for impl_inner in &impl_item.items {
+                        if let syn::ImplItem::Fn(method) = impl_inner
+                            && method.sig.ident == method_name
                         {
-                            let struct_name =
-                                if let syn::Type::Path(type_path) = &*impl_item.self_ty {
-                                    type_path
-                                        .path
-                                        .segments
-                                        .last()
-                                        .map(|s| s.ident.to_string())
-                                        .unwrap_or_default()
-                                } else {
-                                    continue;
-                                };
-
-                            let mut method_tokens = HashMap::new();
-                            let mut found_method = false;
-
-                            for impl_inner in &impl_item.items {
-                                if let syn::ImplItem::Fn(method) = impl_inner {
-                                    if method.sig.ident.to_string() == method_name {
-                                        found_method = true;
-                                        // Tokenize the method body
-                                        let body_str = quote::quote!(#method).to_string();
-                                        let tokens = get_tokens(&body_str);
-                                        for t in tokens {
-                                            *method_tokens.entry(t).or_insert(0) += 1;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if found_method {
-                                // Check if there is a 'new' method in the AST (rough check)
-                                let has_new = content.contains(&format!("fn new("));
-
-                                // Determine module path
-                                let rel_path = file.strip_prefix(src_dir).unwrap_or(&file);
-                                let mod_path = rel_path
-                                    .with_extension("")
-                                    .iter()
-                                    .map(|s| s.to_string_lossy().to_string())
-                                    .collect::<Vec<_>>()
-                                    .join("::");
-
-                                objectives.push(Objective {
-                                    path: format!("crate::{}::{}", mod_path, struct_name),
-                                    name: struct_name,
-                                    has_new,
-                                    tokens: method_tokens,
-                                });
+                            found_method = true;
+                            // Tokenize the method body
+                            let body_str = quote::quote!(#method).to_string();
+                            let tokens = get_tokens(&body_str);
+                            for t in tokens {
+                                *method_tokens.entry(t).or_insert(0) += 1;
                             }
                         }
+                    }
+
+                    if found_method {
+                        // Check if there is a 'new' method in the AST (rough check)
+                        let has_new = content.contains(&"fn new(".to_string());
+
+                        // Determine module path
+                        let rel_path = file.strip_prefix(src_dir).unwrap_or(&file);
+                        let mod_path = rel_path
+                            .with_extension("")
+                            .iter()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .collect::<Vec<_>>()
+                            .join("::");
+
+                        objectives.push(Objective {
+                            path: format!("crate::{}::{}", mod_path, struct_name),
+                            name: struct_name,
+                            has_new,
+                            tokens: method_tokens,
+                        });
                     }
                 }
             }
@@ -150,7 +147,7 @@ pub fn run(src_dir: &str, trait_name: &str, method_name: &str, threshold: f64) {
     let start_time = std::time::Instant::now();
     let output = Command::new("cargo")
         .current_dir(target_root)
-        .args(&[
+        .args([
             "test",
             "--test",
             "covopt_explore_harness",
@@ -191,17 +188,17 @@ pub fn run(src_dir: &str, trait_name: &str, method_name: &str, threshold: f64) {
 }
 
 fn find_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    if dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    find_rs_files(&path, files);
-                } else if path.extension().map(|s| s == "rs").unwrap_or(false)
-                    && path.file_name().unwrap() != "mod.rs"
-                {
-                    files.push(path);
-                }
+    if dir.is_dir()
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                find_rs_files(&path, files);
+            } else if path.extension().map(|s| s == "rs").unwrap_or(false)
+                && path.file_name().unwrap() != "mod.rs"
+            {
+                files.push(path);
             }
         }
     }

@@ -2,7 +2,9 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TargetConfig {

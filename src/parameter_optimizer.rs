@@ -1,4 +1,3 @@
-
 use rand::RngExt;
 use std::collections::HashMap;
 use std::process::Command;
@@ -24,13 +23,12 @@ impl ParameterOptimizer {
             if parts.len() == 2 {
                 let name = parts[0].trim().to_string();
                 let range_parts: Vec<&str> = parts[1].split("..").collect();
-                if range_parts.len() == 2 {
-                    if let (Ok(min), Ok(max)) =
+                if range_parts.len() == 2
+                    && let (Ok(min), Ok(max)) =
                         (range_parts[0].parse::<f64>(), range_parts[1].parse::<f64>())
-                    {
-                        let is_int = !parts[1].replace("..", "").contains('.');
-                        params.insert(name, ParamRange { min, max, is_int });
-                    }
+                {
+                    let is_int = !parts[1].replace("..", "").contains('.');
+                    params.insert(name, ParamRange { min, max, is_int });
                 }
             }
         }
@@ -161,7 +159,7 @@ impl ParameterOptimizer {
 
     fn evaluate(&self, params: &HashMap<String, f64>) -> f64 {
         let mut cmd = Command::new("cargo");
-        cmd.args(&["bench", "--bench", &self.target_test]);
+        cmd.args(["bench", "--bench", &self.target_test]);
 
         for (name, val) in params {
             let env_name = format!("COVOPT_{}", name);
@@ -174,10 +172,10 @@ impl ParameterOptimizer {
         for line in stdout.lines() {
             if line.contains("COVOPT_SCORE:") {
                 let parts: Vec<&str> = line.split("COVOPT_SCORE:").collect();
-                if parts.len() == 2 {
-                    if let Ok(score) = parts[1].trim().parse::<f64>() {
-                        return score;
-                    }
+                if parts.len() == 2
+                    && let Ok(score) = parts[1].trim().parse::<f64>()
+                {
+                    return score;
                 }
             }
         }

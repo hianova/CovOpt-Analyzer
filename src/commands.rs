@@ -1,10 +1,10 @@
-use crate::*;
-use std::path::{Path, PathBuf};
-use std::fs;
-use crate::config::CovOptConfig;
-use crate::runner::CargoTestRunner;
 use crate::analyzer::ConvergenceAnalyzer;
+use crate::config::CovOptConfig;
 use crate::mca::McaRunner;
+use crate::runner::CargoTestRunner;
+use crate::*;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 fn parse_complexity(s: &str) -> Complexity {
     match s.to_uppercase().as_str() {
@@ -95,13 +95,13 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
             }
         };
 
-        if target_symbol.is_none() {
-            if let Some((f, l, sym, _)) = map.find_peak_location() {
-                discovered_target_file = Some(f.clone());
-                discovered_target_line = Some(l);
-                target_symbol = Some(sym.clone());
-                wlog!(log, "Auto-discovered target: {}:{} ({})", f, l, sym);
-            }
+        if target_symbol.is_none()
+            && let Some((f, l, sym, _)) = map.find_peak_location()
+        {
+            discovered_target_file = Some(f.clone());
+            discovered_target_line = Some(l);
+            target_symbol = Some(sym.clone());
+            wlog!(log, "Auto-discovered target: {}:{} ({})", f, l, sym);
         }
 
         let hit_count = if let Some(f) = &discovered_target_file {
@@ -119,10 +119,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
             );
             data.push((n as usize, h));
         } else {
-            wlog!(
-                log,
-                "  -> WARNING: No hit count found. Assuming 0."
-            );
+            wlog!(log, "  -> WARNING: No hit count found. Assuming 0.");
             data.push((n as usize, 0));
         }
         space_data.push((n as usize, peak_rss));
@@ -132,7 +129,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         }
     }
 
-    let target_file = discovered_target_file.expect("Could not auto-discover target file. Ensure tests execute the target.");
+    let target_file = discovered_target_file
+        .expect("Could not auto-discover target file. Ensure tests execute the target.");
     let target_line = discovered_target_line.unwrap();
     wlog!(log, "---------------------------------------------------");
     wlog!(log, "Time Analysis Results:");
@@ -339,7 +337,10 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                         let t_extract = std::time::Instant::now();
                         asm_block_opt = runner
                             .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
-                        println!("[Profile] extract_asm_block_by_keywords 2: {:?}", t_extract.elapsed());
+                        println!(
+                            "[Profile] extract_asm_block_by_keywords 2: {:?}",
+                            t_extract.elapsed()
+                        );
                     }
                     if asm_block_opt.is_none() {
                         wlog!(
@@ -350,7 +351,10 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                         let t_extract = std::time::Instant::now();
                         asm_block_opt =
                             runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
-                        println!("[Profile] extract_asm_block_by_keywords 3: {:?}", t_extract.elapsed());
+                        println!(
+                            "[Profile] extract_asm_block_by_keywords 3: {:?}",
+                            t_extract.elapsed()
+                        );
                     }
                 }
 
@@ -517,7 +521,10 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 println!("  - Function Coverage: {:.1}%", rate);
             }
             if let Some((ipc, rt)) = mca_stats {
-                println!("  - LLVM-MCA (Static Block): IPC {:.2}, RThroughput {:.2}", ipc, rt);
+                println!(
+                    "  - LLVM-MCA (Static Block): IPC {:.2}, RThroughput {:.2}",
+                    ipc, rt
+                );
             }
         }
     } else {
@@ -600,11 +607,11 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 "#;
 
 pub fn init_config(path: Option<String>) {
-    if let Some(p) = path {
-        if let Err(e) = std::env::set_current_dir(&p) {
-            eprintln!("Failed to change directory to {}: {}", p, e);
-            std::process::exit(1);
-        }
+    if let Some(p) = path
+        && let Err(e) = std::env::set_current_dir(&p)
+    {
+        eprintln!("Failed to change directory to {}: {}", p, e);
+        std::process::exit(1);
     }
     let config_path = std::path::PathBuf::from(".covopt.toml");
     if config_path.exists() {
@@ -619,7 +626,8 @@ pub fn init_config(path: Option<String>) {
     std::io::stdin().read_line(&mut input).unwrap();
     let require_aerospace = input.trim().eq_ignore_ascii_case("y");
 
-    let default_config = format!(r#"agent_deterrence = true
+    let default_config = format!(
+        r#"agent_deterrence = true
 
 [[target]]
 test = "my_benchmark_test"
@@ -630,7 +638,9 @@ require_branch_hints = true
 require_aerospace_grade = {}
 require_watchdog_timeout = true
 require_stress_test = true
-"#, require_aerospace);
+"#,
+        require_aerospace
+    );
 
     if let Err(e) = std::fs::write(&config_path, default_config) {
         eprintln!("Failed to write .covopt.toml: {}", e);
@@ -810,6 +820,3 @@ pub fn run_audit() {
         println!("\n[AUDIT PASSED] All targets passed complexity and coverage checks.");
     }
 }
-
-
-
