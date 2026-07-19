@@ -374,7 +374,14 @@ fn main() {
             }
         }
         Some(Commands::Ci(args)) => {
-            let config = config::CovOptConfig::load(".covopt.toml").expect("Failed to load .covopt.toml");
+            let config = match config::CovOptConfig::load(".covopt.toml") {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("CovOpt-Analyzer: Failed to load config (.covopt.toml) - {}", e);
+                    eprintln!("Please run `covopt init` to initialize the project first.");
+                    std::process::exit(1);
+                }
+            };
             if let Err(e) = ci::run_pipeline(config, &args) {
                 eprintln!("CI Pipeline failed: {}", e);
                 std::process::exit(1);

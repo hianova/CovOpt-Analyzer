@@ -192,7 +192,7 @@ impl CargoTestRunner {
         println!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
         println!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
 
-        std::fs::write("/tmp/covopt_debug.json", &lcov_str).unwrap();
+        let _ = std::fs::write(self.output_dir.join("covopt_debug.json"), &lcov_str);
         Ok((map, peak_rss))
     }
 

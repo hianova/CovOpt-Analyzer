@@ -196,7 +196,7 @@ fn find_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
             if path.is_dir() {
                 find_rs_files(&path, files);
             } else if path.extension().map(|s| s == "rs").unwrap_or(false)
-                && path.file_name().unwrap() != "mod.rs"
+                && path.file_name().unwrap_or_default() != "mod.rs"
             {
                 files.push(path);
             }

@@ -48,9 +48,27 @@ macro_rules! wlog {
 pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let mut log = LogBuffer::new(compact);
 
-    let test_name = args.test.as_ref().expect("--test is required").as_str();
-    let expected_str = args.expected.as_ref().expect("--expected is required");
-    let n_values_str = args.n_values.as_ref().expect("--n-values is required");
+    let test_name = match args.test.as_ref() {
+        Some(t) => t.as_str(),
+        None => {
+            wlog!(log, "[ERROR] --test is required or must be configured in .covopt.toml");
+            return false;
+        }
+    };
+    let expected_str = match args.expected.as_ref() {
+        Some(e) => e,
+        None => {
+            wlog!(log, "[ERROR] --expected is required or must be configured in .covopt.toml");
+            return false;
+        }
+    };
+    let n_values_str = match args.n_values.as_ref() {
+        Some(n) => n,
+        None => {
+            wlog!(log, "[ERROR] --n-values is required or must be configured in .covopt.toml");
+            return false;
+        }
+    };
     let mut discovered_target_file: Option<String> = None;
     let mut discovered_target_line: Option<u64> = None;
     let mut target_symbol: Option<String> = None;
@@ -59,15 +77,22 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
 
     let _n_values: Vec<usize> = n_values_str
         .split(',')
-        .map(|s| s.trim().parse().expect("Failed to parse N value"))
+        .map(|s| s.trim().parse().unwrap_or(0))
         .collect();
 
-    let output_dir = tempfile::tempdir()
-        .expect("Failed to create tempdir")
-        .path()
-        .to_path_buf();
-    let mut runner = CargoTestRunner::new(&args.test.clone().unwrap(), &output_dir);
-    runner.prepare().expect("Failed to prepare runner");
+    let output_dir_temp = tempfile::tempdir().map_err(|e| {
+        wlog!(log, "[ERROR] Failed to create tempdir: {}", e);
+    });
+    if output_dir_temp.is_err() {
+        return false;
+    }
+    let output_dir = output_dir_temp.unwrap().path().to_path_buf();
+    
+    let mut runner = CargoTestRunner::new(test_name, &output_dir);
+    if let Err(e) = runner.prepare() {
+        wlog!(log, "[ERROR] Failed to prepare runner: {}", e);
+        return false;
+    }
 
     wlog!(log, "Starting CovOpt Analysis for test '{}'...", test_name);
     wlog!(log, "Target: Auto-Discovery Mode");
@@ -78,8 +103,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let mut target_coverage_rate = None;
     let mut mca_stats = None;
 
-    for n_str in args.n_values.as_ref().unwrap().split(',') {
-        let n: u64 = n_str.trim().parse().expect("Invalid N value");
+    for n_str in n_values_str.split(',') {
+        let n: u64 = n_str.trim().parse().unwrap_or(0);
         wlog!(log, "---------------------------------------------------");
         wlog!(log, "Running for N = {}...", n);
 
@@ -303,7 +328,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 if asm_block_opt.is_none() {
                     let demangled = rustc_demangle::demangle(&symbol).to_string();
                     let clean_demangled = if demangled.ends_with('>') && demangled.contains("::<") {
-                        let idx = demangled.rfind("::<").unwrap();
+                        let idx = demangled.rfind("::<").unwrap_or(demangled.len());
                         &demangled[..idx]
                     } else {
                         &demangled
@@ -771,7 +796,8 @@ pub fn run_audit() {
     }
     let config_path = ".covopt.toml";
     if !PathBuf::from(config_path).exists() {
-        eprintln!("Config file {} not found.", config_path);
+        eprintln!("CovOpt-Analyzer: Config file {} not found.", config_path);
+        eprintln!("Please run `covopt init` to initialize the project first.");
         std::process::exit(1);
     }
 
