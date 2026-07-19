@@ -377,7 +377,10 @@ fn main() {
             let config = match config::CovOptConfig::load(".covopt.toml") {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("CovOpt-Analyzer: Failed to load config (.covopt.toml) - {}", e);
+                    eprintln!(
+                        "CovOpt-Analyzer: Failed to load config (.covopt.toml) - {}",
+                        e
+                    );
                     eprintln!("Please run `covopt init` to initialize the project first.");
                     std::process::exit(1);
                 }

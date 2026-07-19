@@ -1,6 +1,6 @@
 use crate::config::CovOptConfig;
-use crate::{commands, CiArgs};
 use crate::harden;
+use crate::{CiArgs, commands};
 
 pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("===================================================");
@@ -41,12 +41,12 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
             if fuzz_iters > 0 {
                 println!("  -> Hardening target: {}", target_config.test);
                 if !harden::run_fuzz(&target_config.test) {
-                     success = false;
-                     eprintln!("⚠️ [CI Warning] fuzz failed for {}", target_config.test);
+                    success = false;
+                    eprintln!("⚠️ [CI Warning] fuzz failed for {}", target_config.test);
                 }
             }
         }
-        
+
         if args.strict && !success {
             eprintln!("❌ [CI Failed] Hardening encountered errors in strict mode.");
             std::process::exit(1);

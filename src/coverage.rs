@@ -111,13 +111,22 @@ impl CoverageMap {
         for (file, file_hits) in &self.hit_counts {
             for (line, &hits) in file_hits {
                 if hits > peak_hits {
-                    peak_hits = hits;
                     let sym_str = self
                         .symbol_map
                         .get(file)
                         .and_then(|m| m.get(line))
                         .cloned()
                         .unwrap_or_else(|| "unknown".to_string());
+
+                    let demangled = rustc_demangle::demangle(&sym_str).to_string();
+                    if demangled.contains("unlikely")
+                        || demangled.contains("likely")
+                        || demangled.contains("black_box")
+                    {
+                        continue;
+                    }
+
+                    peak_hits = hits;
                     peak_loc = Some((file.clone(), *line, sym_str, hits));
                 }
             }

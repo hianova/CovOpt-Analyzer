@@ -52,16 +52,17 @@ impl AutoSimd {
         for file_path in files_to_scan {
             let file_path_str = file_path.to_string_lossy().to_string();
             if let Ok(content) = fs::read_to_string(&file_path)
-                && let Ok(syntax_tree) = syn::parse_file(&content) {
-                    let mut scanner = SimdScanner {
-                        file_path: file_path_str.clone(),
-                        function_name: String::new(),
-                        potential_loops: 0,
-                    };
+                && let Ok(syntax_tree) = syn::parse_file(&content)
+            {
+                let mut scanner = SimdScanner {
+                    file_path: file_path_str.clone(),
+                    function_name: String::new(),
+                    potential_loops: 0,
+                };
 
-                    scanner.visit_file(&syntax_tree);
-                    total_opportunities += scanner.potential_loops;
-                }
+                scanner.visit_file(&syntax_tree);
+                total_opportunities += scanner.potential_loops;
+            }
         }
 
         println!(
@@ -74,21 +75,22 @@ impl AutoSimd {
 
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if dir.is_dir()
-        && let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if file_name != "target"
-                        && file_name != ".git"
-                        && file_name != "fuzz"
-                        && !file_name.starts_with('.')
-                    {
-                        collect_rust_files(&path, files);
-                    }
-                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    files.push(path);
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if file_name != "target"
+                    && file_name != ".git"
+                    && file_name != "fuzz"
+                    && !file_name.starts_with('.')
+                {
+                    collect_rust_files(&path, files);
                 }
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                files.push(path);
             }
         }
+    }
 }

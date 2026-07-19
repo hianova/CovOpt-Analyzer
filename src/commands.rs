@@ -51,21 +51,30 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let test_name = match args.test.as_ref() {
         Some(t) => t.as_str(),
         None => {
-            wlog!(log, "[ERROR] --test is required or must be configured in .covopt.toml");
+            wlog!(
+                log,
+                "[ERROR] --test is required or must be configured in .covopt.toml"
+            );
             return false;
         }
     };
     let expected_str = match args.expected.as_ref() {
         Some(e) => e,
         None => {
-            wlog!(log, "[ERROR] --expected is required or must be configured in .covopt.toml");
+            wlog!(
+                log,
+                "[ERROR] --expected is required or must be configured in .covopt.toml"
+            );
             return false;
         }
     };
     let n_values_str = match args.n_values.as_ref() {
         Some(n) => n,
         None => {
-            wlog!(log, "[ERROR] --n-values is required or must be configured in .covopt.toml");
+            wlog!(
+                log,
+                "[ERROR] --n-values is required or must be configured in .covopt.toml"
+            );
             return false;
         }
     };
@@ -87,7 +96,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
         return false;
     }
     let output_dir = output_dir_temp.unwrap().path().to_path_buf();
-    
+
     let mut runner = CargoTestRunner::new(test_name, &output_dir);
     if let Err(e) = runner.prepare() {
         wlog!(log, "[ERROR] Failed to prepare runner: {}", e);
@@ -144,12 +153,21 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 peak_rss
             );
             data.push((n as usize, h));
-            
+
             if h == 0 {
                 wlog!(log, "\n> [!WARNING] COVOPT GUIDANCE: HIT COUNT = 0 <");
-                wlog!(log, "The target function was executed 0 times during profiling, but the test succeeded.");
-                wlog!(log, "This often happens to pure math functions due to LLVM Auto-Vectorization or Dead Code Elimination (DCE).");
-                wlog!(log, "=> SUGGESTION: Add `#[inline(never)]` to the target function during testing, and ensure loop variables are wrapped with `std::hint::black_box()`.");
+                wlog!(
+                    log,
+                    "The target function was executed 0 times during profiling, but the test succeeded."
+                );
+                wlog!(
+                    log,
+                    "This often happens to pure math functions due to LLVM Auto-Vectorization or Dead Code Elimination (DCE)."
+                );
+                wlog!(
+                    log,
+                    "=> SUGGESTION: Add `#[inline(never)]` to the target function during testing, and ensure loop variables are wrapped with `std::hint::black_box()`."
+                );
             }
         } else {
             wlog!(log, "  -> WARNING: No hit count found. Assuming 0.");
@@ -240,7 +258,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
 
     let mut static_branch_hints = None;
     if args.require_branch_hints {
-        let (has_hints, applicable) = static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
+        let (has_hints, applicable) =
+            static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
         static_branch_hints = Some(has_hints);
         if applicable {
             if has_hints {
@@ -280,32 +299,42 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
 
     let mut static_watchdog_timeout = None;
     if args.require_watchdog_timeout {
-        let has_watchdog =
+        let (has_watchdog, applicable) =
             static_analysis::analyze_watchdog_timeout(std::path::Path::new(&target_file));
         static_watchdog_timeout = Some(has_watchdog);
-        if has_watchdog {
-            wlog!(log, "Static Watchdog Timeout: Detected");
+        if applicable {
+            if has_watchdog {
+                wlog!(log, "Static Watchdog Timeout: Detected");
+            } else {
+                wlog!(
+                    log,
+                    "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks."
+                );
+                success = false;
+            }
         } else {
-            wlog!(
-                log,
-                "\n[ERROR] Missing Watchdog Timeout! Strict mode requires timeout mechanisms (e.g. recv_timeout) to prevent infinite spin deadlocks."
-            );
-            success = false;
+            static_watchdog_timeout = Some(true); // Treat as passed
+            wlog!(log, "Static Watchdog Timeout: Not Applicable (Pure Function)");
         }
     }
 
     let mut static_stress_test = None;
     if args.require_stress_test {
-        let has_stress = static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
+        let (has_stress, applicable) = static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
         static_stress_test = Some(has_stress);
-        if has_stress {
-            wlog!(log, "Static Stress Test: Detected");
+        if applicable {
+            if has_stress {
+                wlog!(log, "Static Stress Test: Detected");
+            } else {
+                wlog!(
+                    log,
+                    "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic."
+                );
+                success = false;
+            }
         } else {
-            wlog!(
-                log,
-                "\n[ERROR] Missing High-Pressure Stress Test! Target file lacks heavy concurrent thread spawning logic."
-            );
-            success = false;
+            static_stress_test = Some(true); // Treat as passed
+            wlog!(log, "Static Stress Test: Not Applicable (Pure Function)");
         }
     }
 
@@ -666,7 +695,9 @@ pub fn init_config(args: crate::InitArgs) {
     let config_path = std::path::PathBuf::from(".covopt.toml");
     let has_config = config_path.exists();
     if has_config {
-        println!("CovOpt-Analyzer: .covopt.toml already exists. Skipping config creation, but will ensure rules are injected.");
+        println!(
+            "CovOpt-Analyzer: .covopt.toml already exists. Skipping config creation, but will ensure rules are injected."
+        );
     } else {
         use std::io::Write;
         let require_aerospace = if args.yes {
@@ -752,10 +783,12 @@ require_stress_test = true
 
         let agents_md = agents_dir.join("AGENTS.md");
         let current_agents_md = std::fs::read_to_string(&agents_md).unwrap_or_default();
-        
+
         // Remove the old block if it exists
         let mut new_agents_md = current_agents_md.clone();
-        if let Some(start_idx) = new_agents_md.find("# CovOpt Optimization & Tuning Rules (Google Antigravity)") {
+        if let Some(start_idx) =
+            new_agents_md.find("# CovOpt Optimization & Tuning Rules (Google Antigravity)")
+        {
             if let Some(end_idx) = new_agents_md[start_idx..].find("# ") {
                 if end_idx > 0 {
                     // There's another rule block after this one
@@ -775,7 +808,7 @@ require_stress_test = true
         new_agents_md.push('\n');
         new_agents_md.push_str(COVOPT_AGENT_RULES);
         new_agents_md.push('\n');
-        
+
         if let Err(e) = std::fs::write(&agents_md, new_agents_md) {
             eprintln!("Failed to update {:?}: {}", agents_md, e);
         } else {

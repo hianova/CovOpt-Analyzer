@@ -30,21 +30,22 @@ impl AutoRefactor {
 
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if dir.is_dir()
-        && let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if file_name != "target"
-                        && file_name != ".git"
-                        && file_name != "fuzz"
-                        && !file_name.starts_with('.')
-                    {
-                        collect_rust_files(&path, files);
-                    }
-                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    files.push(path);
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if file_name != "target"
+                    && file_name != ".git"
+                    && file_name != "fuzz"
+                    && !file_name.starts_with('.')
+                {
+                    collect_rust_files(&path, files);
                 }
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                files.push(path);
             }
         }
+    }
 }

@@ -341,7 +341,7 @@ impl<'ast> Visit<'ast> for CachePaddingVisitor {
         self.has_structs_or_enums = true;
         syn::visit::visit_item_struct(self, node);
     }
-    
+
     fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
         self.has_structs_or_enums = true;
         syn::visit::visit_item_enum(self, node);
@@ -375,7 +375,10 @@ pub fn analyze_cache_padding(source_file: &Path) -> (bool, bool) {
         return (false, true);
     };
     if let Ok(ast) = syn::parse_file(&content) {
-        let mut visitor = CachePaddingVisitor { has_padding: false, has_structs_or_enums: false };
+        let mut visitor = CachePaddingVisitor {
+            has_padding: false,
+            has_structs_or_enums: false,
+        };
         visitor.visit_file(&ast);
         return (visitor.has_padding, visitor.has_structs_or_enums);
     }
@@ -426,6 +429,15 @@ impl<'ast> Visit<'ast> for BranchHintVisitor {
         }
         syn::visit::visit_expr_call(self, node);
     }
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if let Some(segment) = node.path.segments.last() {
+            let name = segment.ident.to_string();
+            if name == "likely" || name == "unlikely" {
+                self.has_hint = true;
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
 }
 
 pub fn analyze_branch_hints(source_file: &Path) -> (bool, bool) {
@@ -433,7 +445,10 @@ pub fn analyze_branch_hints(source_file: &Path) -> (bool, bool) {
         return (false, true);
     };
     if let Ok(ast) = syn::parse_file(&content) {
-        let mut visitor = BranchHintVisitor { has_hint: false, has_control_flow: false };
+        let mut visitor = BranchHintVisitor {
+            has_hint: false,
+            has_control_flow: false,
+        };
         visitor.visit_file(&ast);
         return (visitor.has_hint, visitor.has_control_flow);
     }
@@ -684,7 +699,11 @@ impl<'ast> Visit<'ast> for WatchdogVisitor {
     }
 }
 
-pub fn analyze_watchdog_timeout(source_file: &Path) -> bool {
+pub fn analyze_watchdog_timeout(source_file: &Path) -> (bool, bool) {
+    let thread_acts = analyze_thread_activity(source_file);
+    if thread_acts.is_empty() {
+        return (false, false);
+    }
     if let Ok(content) = fs::read_to_string(source_file)
         && let Ok(ast) = syn::parse_file(&content)
     {
@@ -692,9 +711,9 @@ pub fn analyze_watchdog_timeout(source_file: &Path) -> bool {
             has_watchdog: false,
         };
         visitor.visit_file(&ast);
-        return visitor.has_watchdog;
+        return (visitor.has_watchdog, true);
     }
-    false
+    (false, true)
 }
 
 struct StressVisitor {
@@ -711,15 +730,19 @@ impl<'ast> Visit<'ast> for StressVisitor {
     }
 }
 
-pub fn analyze_stress_test(source_file: &Path) -> bool {
+pub fn analyze_stress_test(source_file: &Path) -> (bool, bool) {
+    let thread_acts = analyze_thread_activity(source_file);
+    if thread_acts.is_empty() {
+        return (false, false);
+    }
     if let Ok(content) = fs::read_to_string(source_file)
         && let Ok(ast) = syn::parse_file(&content)
     {
         let mut visitor = StressVisitor { has_stress: false };
         visitor.visit_file(&ast);
-        return visitor.has_stress;
+        return (visitor.has_stress, true);
     }
-    false
+    (false, true)
 }
 
 fn check_crate_root_no_std() -> bool {

@@ -60,34 +60,35 @@ impl AutoHarness {
         for file_path in files_to_scan {
             let _file_path_str = file_path.to_string_lossy().to_string();
             if let Ok(content) = fs::read_to_string(&file_path)
-                && let Ok(syntax_tree) = syn::parse_file(&content) {
-                    let mut scanner = FnScanner {
-                        public_functions: Vec::new(),
-                    };
+                && let Ok(syntax_tree) = syn::parse_file(&content)
+            {
+                let mut scanner = FnScanner {
+                    public_functions: Vec::new(),
+                };
 
-                    scanner.visit_file(&syntax_tree);
+                scanner.visit_file(&syntax_tree);
 
-                    for (fn_name, _param_types) in scanner.public_functions {
-                        total_funcs += 1;
-                        let harness_content = format!(
-                            "#![no_main]\n\
+                for (fn_name, _param_types) in scanner.public_functions {
+                    total_funcs += 1;
+                    let harness_content = format!(
+                        "#![no_main]\n\
                             use libfuzzer_sys::fuzz_target;\n\
                             \n\
                             fuzz_target!(|data: &[u8]| {{\n\
                             \t// CovOpt Auto-Generated Harness for {}\n\
                             }});\n",
-                            fn_name
-                        );
+                        fn_name
+                    );
 
-                        let target_path = fuzz_dir.join(format!("auto_target_{}.rs", total_funcs));
-                        fs::write(&target_path, harness_content)
-                            .context("Failed to write fuzz target")?;
-                        println!(
-                            "  -> Generated Harness for {} at {:?}",
-                            fn_name, target_path
-                        );
-                    }
+                    let target_path = fuzz_dir.join(format!("auto_target_{}.rs", total_funcs));
+                    fs::write(&target_path, harness_content)
+                        .context("Failed to write fuzz target")?;
+                    println!(
+                        "  -> Generated Harness for {} at {:?}",
+                        fn_name, target_path
+                    );
                 }
+            }
         }
 
         println!(
@@ -100,21 +101,22 @@ impl AutoHarness {
 
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if dir.is_dir()
-        && let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if file_name != "target"
-                        && file_name != ".git"
-                        && file_name != "fuzz"
-                        && !file_name.starts_with('.')
-                    {
-                        collect_rust_files(&path, files);
-                    }
-                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    files.push(path);
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if file_name != "target"
+                    && file_name != ".git"
+                    && file_name != "fuzz"
+                    && !file_name.starts_with('.')
+                {
+                    collect_rust_files(&path, files);
                 }
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                files.push(path);
             }
         }
+    }
 }
