@@ -12,6 +12,7 @@ pub mod parameter_optimizer;
 pub mod profiler;
 pub mod runner;
 pub mod static_analysis;
+pub mod scanner;
 
 use clap::{Parser, Subcommand};
 
@@ -45,6 +46,9 @@ enum Commands {
 
     /// Performance Parameter Auto-Tuning & Optimization
     Optimize(OptimizeArgs),
+    
+    /// Scan Rust files for hardcoded magic numbers
+    ScanMagic(ScanMagicArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -55,6 +59,12 @@ pub struct InitArgs {
     /// Skip interactive prompts and accept default values
     #[arg(short, long)]
     pub yes: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ScanMagicArgs {
+    /// Optional path to scan (defaults to current directory)
+    pub path: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -188,6 +198,7 @@ fn main() {
 
     match cli.command {
         Some(Commands::Init(args)) => commands::init_config(args),
+        Some(Commands::ScanMagic(args)) => crate::scanner::run_scan(args.path),
         Some(Commands::Fix) => commands::run_fix(),
         Some(Commands::InstallHook) => commands::install_hook(),
         Some(Commands::Audit) => commands::run_audit(),

@@ -3,6 +3,7 @@ use crate::config::CovOptConfig;
 use crate::mca::McaRunner;
 use crate::runner::CargoTestRunner;
 use crate::*;
+use crate::entropy;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -601,6 +602,7 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 - `covopt init`: Initializes a `.covopt.toml` and injects these rules into `.agents/AGENTS.md`.
 - `covopt install-hook`: Install a pre-commit hook in the current git repository.
 - `covopt optimize`: Performance Parameter Auto-Tuning & Optimization.
+- `covopt scan-magic`: Scan Rust files for hardcoded magic numbers.
 - `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
