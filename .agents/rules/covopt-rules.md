@@ -4,7 +4,7 @@
 
 ## Rule 1: Zero-Entropy Tuning
 - **NEVER** use hardcoded magical numbers for caching thresholds, buffer sizes, or critical performance parameters.
-- **ALWAYS** use the `covopt_param!` macro to define these parameters.
+- **ALWAYS** use the `covopt_param!` macro to define these parameters. You must import it by adding `covopt-analyzer` to your dependencies and using `use covopt_analyzer::covopt_param;`. Do **NOT** write the macro yourself.
 - Before submitting performance-related code, you MUST run `covopt audit` and ensure the Entropy Score is `0.0`. If it is not, use `covopt optimize` or `covopt optimize --explore` to converge the parameters.
 
 ## Rule 2: Anti-DCE in Benchmarks

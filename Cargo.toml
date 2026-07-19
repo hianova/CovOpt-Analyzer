@@ -5,6 +5,10 @@ edition = "2024"
 
 [workspace]
 
+[lib]
+name = "covopt_analyzer"
+path = "src/lib.rs"
+
 exclude = [".covopt/"]
 
 [[bin]]

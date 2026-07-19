@@ -1,11 +1,42 @@
+# RTK - Rust Token Killer (Google Antigravity)
 
+**Usage**: Token-optimized CLI proxy for shell commands.
+
+## Rule
+
+Always prefix shell commands with `rtk` to minimize token consumption.
+
+Examples:
+
+```bash
+rtk git status
+rtk cargo test
+rtk ls src/
+rtk grep "pattern" src/
+rtk find "*.rs" .
+rtk docker ps
+rtk gh pr list
+```
+
+## Meta Commands
+
+```bash
+rtk gain              # Show token savings
+rtk gain --history    # Command history with savings
+rtk discover          # Find missed RTK opportunities
+rtk proxy <cmd>       # Run raw (no filtering, for debugging)
+```
+
+## Why
+
+RTK filters and compresses command output before it reaches the LLM context, saving 60-90% tokens on common operations. Always use `rtk <cmd>` instead of raw commands.
 # CovOpt Optimization & Tuning Rules (Google Antigravity)
 
 **Usage**: AI Agent instructions for performance verification and parameter tuning.
 
 ## Rule 1: Zero-Entropy Tuning
 - **NEVER** use hardcoded magical numbers for caching thresholds, buffer sizes, or critical performance parameters.
-- **ALWAYS** use the `covopt_param!` macro to define these parameters.
+- **ALWAYS** use the `covopt_param!` macro to define these parameters. You must import it by adding `covopt-analyzer` to your dependencies and using `use covopt_analyzer::covopt_param;`. Do **NOT** write the macro yourself.
 - Before submitting performance-related code, you MUST run `covopt audit` and ensure the Entropy Score is `0.0`. If it is not, use `covopt optimize` or `covopt optimize --explore` to converge the parameters.
 
 ## Rule 2: Anti-DCE in Benchmarks
@@ -33,4 +64,3 @@
 - `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
-
