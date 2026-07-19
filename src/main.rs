@@ -51,6 +51,10 @@ enum Commands {
 pub struct InitArgs {
     /// Optional path to initialize in (defaults to current directory)
     pub path: Option<String>,
+
+    /// Skip interactive prompts and accept default values
+    #[arg(short, long)]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -183,7 +187,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Init(args)) => commands::init_config(args.path),
+        Some(Commands::Init(args)) => commands::init_config(args),
         Some(Commands::Fix) => commands::run_fix(),
         Some(Commands::InstallHook) => commands::install_hook(),
         Some(Commands::Audit) => commands::run_audit(),

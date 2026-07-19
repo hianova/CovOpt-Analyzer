@@ -606,8 +606,8 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 - `covopt --help`: View all available commands and detailed usage instructions.
 "#;
 
-pub fn init_config(path: Option<String>) {
-    if let Some(p) = path
+pub fn init_config(args: crate::InitArgs) {
+    if let Some(p) = args.path
         && let Err(e) = std::env::set_current_dir(&p)
     {
         eprintln!("Failed to change directory to {}: {}", p, e);
@@ -620,11 +620,15 @@ pub fn init_config(path: Option<String>) {
     }
 
     use std::io::Write;
-    print!("Enable Aerospace Grade checks? [y/N]: ");
-    std::io::stdout().flush().unwrap();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-    let require_aerospace = input.trim().eq_ignore_ascii_case("y");
+    let require_aerospace = if args.yes {
+        false
+    } else {
+        print!("Enable Aerospace Grade checks? [y/N]: ");
+        std::io::stdout().flush().unwrap();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+        input.trim().eq_ignore_ascii_case("y")
+    };
 
     let default_config = format!(
         r#"agent_deterrence = true
