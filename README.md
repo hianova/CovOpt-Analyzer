@@ -49,14 +49,17 @@ Depending on whether you are running `covopt` manually in a terminal, or configu
 
 ## Installation 📦
 
-Clone the repository and build it locally:
+Since CovOpt-Analyzer is published on crates.io, you can easily install it via Cargo:
 
 ```bash
-git clone https://github.com/your-username/CovOpt-Analyzer.git
+cargo install CovOpt-Analyzer
+```
+
+Alternatively, to build from source:
+```bash
+git clone https://github.com/hianova/CovOpt-Analyzer.git
 cd CovOpt-Analyzer
 cargo build --release
-
-# Optional: Add the executable to your PATH
 export PATH=$PATH:$(pwd)/target/release
 ```
 
@@ -155,8 +158,6 @@ covopt init
 This will generate a `.covopt.toml` file where you can define your targets:
 
 ```toml
-agent_deterrence = true
-
 [[target]]
 test = "test_process_complexity"
 expected = "ON"
@@ -196,13 +197,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      
-      # IMPORTANT: cargo-llvm-cov is required for coverage extraction
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-        
+          
       - name: Install CovOpt-Analyzer
-        run: cargo install --git https://github.com/your-username/CovOpt-Analyzer.git
+        run: cargo install CovOpt-Analyzer
         
       - name: Run Audit
         run: covopt audit
@@ -226,7 +223,6 @@ To ensure your algorithmic loop is preserved and accurately counted:
 1. **Use `std::hint::black_box`**: Wrap the inputs and the final output of your loop in `black_box`. This tells LLVM that the value is opaque and cannot be optimized away.
 2. **Use `#[inline(never)]`**: Add this macro to the function you are profiling. If the function gets inlined into the test runner, LLVM-MCA might fail to locate the target assembly block.
 
-## [Simulating Time With Square-Root Space](https://arxiv.org/abs/2502.17779)
 
 ## License 📜
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
