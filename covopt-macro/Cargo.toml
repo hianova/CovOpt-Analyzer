@@ -1,6 +1,6 @@
 [package]
 name = "covopt-macro"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 description = "Lightweight zero-dependency parameter tuning macro for CovOpt-Analyzer"
 license = "MIT"
