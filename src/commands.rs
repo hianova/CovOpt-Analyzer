@@ -45,7 +45,7 @@ macro_rules! wlog {
     }};
 }
 
-pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
+pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option<&[PathBuf]>) -> bool {
     let mut log = LogBuffer::new(compact);
 
     let test_name = match args.test.as_ref() {
@@ -61,7 +61,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let mut ast_expected = None;
     let mut ast_n_values = None;
     if args.expected.is_none() || args.n_values.is_none() {
-        if let Some((e, n)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
+        if let Some((e, n, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
             ast_expected = Some(e);
             ast_n_values = Some(n);
         }
@@ -106,11 +106,19 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     }
     let output_dir = output_dir_temp.unwrap().path().to_path_buf();
 
-    let mut runner = CargoTestRunner::new(test_name, &output_dir);
-    if let Err(e) = runner.prepare() {
-        wlog!(log, "[ERROR] Failed to prepare runner: {}", e);
-        return false;
-    }
+    let executables = if let Some(exes) = workspace_executables {
+        exes.to_vec()
+    } else {
+        match crate::runner::compile_workspace_tests(&output_dir, &[]) {
+            Ok(exes) => exes,
+            Err(e) => {
+                wlog!(log, "[ERROR] Failed to compile workspace tests: {}", e);
+                return false;
+            }
+        }
+    };
+
+    let runner = std::sync::Arc::new(CargoTestRunner::new(test_name, &output_dir, executables));
 
     wlog!(log, "Starting CovOpt Analysis for test '{}'...", test_name);
     wlog!(log, "Target: Auto-Discovery Mode");
@@ -121,12 +129,37 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     let mut target_coverage_rate = None;
     let mut mca_stats = None;
 
+    let mut handles = Vec::new();
+
     for n_str in n_values_str.split(',') {
         let n: u64 = n_str.trim().parse().unwrap_or(0);
+        let runner_clone = std::sync::Arc::clone(&runner);
+        
+        handles.push(std::thread::spawn(move || {
+            let result = runner_clone.run(n as usize, None);
+            (n, result)
+        }));
+    }
+
+    let mut results = Vec::new();
+    for handle in handles {
+        match handle.join() {
+            Ok((n, result)) => results.push((n, result)),
+            Err(_) => {
+                wlog!(log, "[ERROR] A worker thread panicked during execution.");
+                return false;
+            }
+        }
+    }
+    
+    // Sort results to process them sequentially
+    results.sort_by_key(|(n, _)| *n);
+
+    for (n, result) in results {
         wlog!(log, "---------------------------------------------------");
         wlog!(log, "Running for N = {}...", n);
 
-        let (map, peak_rss) = match runner.run(n as usize, None) {
+        let (map, peak_rss) = match result {
             Ok(m) => m,
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to run coverage for N={}: {}", n, e);
@@ -764,7 +797,7 @@ pub fn init_config(args: crate::InitArgs) {
             r#"[[target]]
 test = "my_benchmark_test"
 expected = "O(1)"
-n_values = "100,500,1000"
+n_values = "10,500,10000"
 require_cache_padding = true
 require_branch_hints = true
 require_aerospace_grade = {}
@@ -907,6 +940,39 @@ pub fn run_audit() {
         }
     };
 
+    let global_output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
+    println!("CovOpt-Analyzer: Resolving packages for Batch Compilation Mode...");
+    
+    let mut packages_to_compile = Vec::new();
+    for target in &config.target {
+        if let Some(pkg) = &target.package {
+            if !packages_to_compile.contains(pkg) {
+                packages_to_compile.push(pkg.clone());
+            }
+        } else if let Some((_, _, path)) = crate::static_analysis::find_covopt_test_metadata(&target.test) {
+            if let Some(pkg) = crate::static_analysis::find_package_for_file(&path) {
+                if !packages_to_compile.contains(&pkg) {
+                    println!("Auto-discovered test '{}' in package '{}'", target.test, pkg);
+                    packages_to_compile.push(pkg);
+                }
+            }
+        }
+    }
+
+    if packages_to_compile.is_empty() {
+        println!("CovOpt-Analyzer: Compiling ENTIRE workspace tests (no packages resolved)...");
+    } else {
+        println!("CovOpt-Analyzer: Compiling specific packages: {:?}", packages_to_compile);
+    }
+
+    let workspace_executables = match crate::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
+        Ok(exes) => exes,
+        Err(e) => {
+            eprintln!("Failed to compile workspace tests: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     let mut all_success = true;
     for target in config.target {
         let args = RunArgs {
@@ -926,7 +992,7 @@ pub fn run_audit() {
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
         println!("===================================================");
-        if !run_analysis(&args, true) {
+        if !run_analysis(&args, true, Some(&workspace_executables)) {
             all_success = false;
         }
 

@@ -37,6 +37,7 @@ impl Default for PipelineConfig {
 pub struct TargetConfig {
     pub test: String,
     pub tests: Option<String>,
+    pub package: Option<String>,
     pub expected: Option<String>,
     pub n_values: Option<String>,
     pub fuzz_iterations: Option<u32>,

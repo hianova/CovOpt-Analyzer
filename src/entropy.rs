@@ -69,12 +69,9 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let iterations = config.fuzz_iterations.unwrap_or(10);
     let n_value = 100; // Use a fixed N for fuzzing loops
 
-    let output_dir = tempfile::tempdir()
-        .expect("Failed to create tempdir")
-        .path()
-        .to_path_buf();
-    let mut runner = CargoTestRunner::new(&config.test, &output_dir);
-    runner.prepare().expect("Failed to prepare executables");
+    let output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &[]).unwrap_or_default();
+    let runner = crate::runner::CargoTestRunner::new(&config.test, &output_dir, executables);
 
     use rayon::prelude::*;
 
@@ -86,8 +83,7 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
                 .expect("Failed to create tempdir")
                 .path()
                 .to_path_buf();
-            let mut local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir);
-            local_runner.executables = runner.executables.clone();
+            let local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir, runner.executables.clone());
 
             if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
                 && let Some((_, _, _, hits)) = map.find_peak_location()
@@ -159,9 +155,10 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
         .path()
         .to_path_buf();
 
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &[]).unwrap_or_default();
+
     for tc in &test_cases {
-        let mut runner = CargoTestRunner::new(tc, &output_dir);
-        runner.prepare().unwrap_or_default();
+        let runner = CargoTestRunner::new(tc, &output_dir, executables.clone());
         if let Ok((map, _)) = runner.run(100, None) {
             let mut lines = std::collections::HashSet::new();
             if let Some((target_file, _, _, _)) = map.find_peak_location() {

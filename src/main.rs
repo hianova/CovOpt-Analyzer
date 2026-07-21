@@ -447,7 +447,7 @@ fn main() {
 
         None => {
             if cli.run_args.test.is_some() {
-                if !commands::run_analysis(&cli.run_args, false) {
+                if !commands::run_analysis(&cli.run_args, false, None) {
                     std::process::exit(1);
                 }
             } else {

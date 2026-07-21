@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
@@ -806,7 +806,7 @@ pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
     item_fn.sig.inputs.len()
 }
 
-pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String)> {
+pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, PathBuf)> {
     let walker = walkdir::WalkDir::new(".")
         .into_iter()
         .filter_entry(|e| {
@@ -856,7 +856,7 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String)> {
                                                 }
                                             }
                                             if let (Some(e), Some(n)) = (expected, n_values) {
-                                                return Some((e, n));
+                                                return Some((e, n, entry.path().to_path_buf()));
                                             }
                                         }
                                     }
@@ -897,6 +897,26 @@ pub fn find_covopt_track_anchor() -> Option<(String, u64)> {
                 }
             }
         }
+    }
+    None
+}
+
+pub fn find_package_for_file(path: &Path) -> Option<String> {
+    let mut current_dir = path.parent();
+    while let Some(dir) = current_dir {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(content) = fs::read_to_string(&cargo_toml) {
+                if let Ok(value) = content.parse::<toml::Value>() {
+                    if let Some(pkg) = value.get("package") {
+                        if let Some(name) = pkg.get("name").and_then(|n| n.as_str()) {
+                            return Some(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        current_dir = dir.parent();
     }
     None
 }
