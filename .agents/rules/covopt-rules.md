@@ -22,21 +22,24 @@
 - All magic numbers must be uniformly defined using `covopt_parm!`.
 
 ## Available Commands (CovOpt-Analyzer)
-- `covopt audit`: Fast, low-entropy verification checking with quiet checklist output.
-
+- `covopt init`: Initializes a `.covopt.toml` and injects these rules. Use `--hook` to install a pre-commit hook.
+- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize).
 - `covopt fix`: Automatically fix Clippy warnings and formatting.
-- `covopt harden`: Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers). Use `--sanitize --auto-fix` to automate self-healing ReAct compilation loops for memory bugs.
-- `covopt init`: Initializes a `.covopt.toml` and injects these rules into `.agents/AGENTS.md`.
-- `covopt install-hook`: Install a pre-commit hook in the current git repository.
-- `covopt optimize`: Performance Parameter Auto-Tuning & Optimization.
-- `covopt scan-magic`: Scan Rust files for hardcoded magic numbers.
-- `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
-- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize -> Harden).
-- `covopt generate-fuzz`: Generate fuzzing harnesses for public functions.
-- `covopt pgo-inject`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
-- `covopt tune-layout`: Tune struct memory layouts for cache efficiency.
 - `covopt report`: Generate an HTML dashboard report.
-- `covopt vectorize`: Scan for SIMD auto-vectorization opportunities.
-- `covopt ai-refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
+
+- `covopt check audit`: Fast, low-entropy verification checking with quiet checklist output.
+- `covopt check magic`: Scan Rust files for hardcoded magic numbers.
+- `covopt check advise`: Advanced qualitative analysis. Detect micro-architectural pipeline stalls, God Functions, and cross-file Semantic Clones.
+
+- `covopt tune params`: Performance Parameter Auto-Tuning & Optimization.
+- `covopt tune profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
+- `covopt tune layout`: Tune struct memory layouts for cache efficiency.
+- `covopt tune vectorize`: Scan for SIMD auto-vectorization opportunities.
+- `covopt tune pgo`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
+- `covopt tune refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
+
+- `covopt harden run`: Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers). Use `--sanitize --auto-fix` to automate self-healing.
+- `covopt harden fuzz`: Generate fuzzing harnesses for public functions.
+
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.

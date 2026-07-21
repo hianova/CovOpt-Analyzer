@@ -21,6 +21,9 @@ pub mod runner;
 pub mod scanner;
 pub mod static_analysis;
 pub mod struct_layout;
+pub mod advisor;
+pub mod asm_extractor;
+
 
 use clap::{Parser, Subcommand};
 
@@ -38,52 +41,71 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands {
-    /// Install a pre-commit hook in the current git repository
-    InstallHook,
+pub enum Commands {
     /// Initialize a default .covopt.toml in the target directory
     Init(InitArgs),
+
+    /// Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize)
+    Ci(CiArgs),
+
     /// Automatically fix Clippy warnings and formatting
     Fix,
-    /// Audit all targets defined in .covopt.toml
-    Audit,
-    /// Profile a target to diagnose CPU hotspots and lock contention
-    Profile(ProfileArgs),
-    /// Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers)
-    Harden(HardenArgs),
-
-    /// Performance Parameter Auto-Tuning & Optimization
-    Optimize(OptimizeArgs),
-
-    /// Scan Rust files for hardcoded magic numbers
-    ScanMagic(ScanMagicArgs),
-
-    /// Generate fuzzing harnesses for public functions
-    #[command(name = "generate-fuzz")]
-    GenerateFuzz(GenerateFuzzArgs),
-
-    /// Inject dynamic PGO (likely/unlikely) probes based on coverage
-    #[command(name = "pgo-inject")]
-    PgoInject(PgoInjectArgs),
-
-    /// Tune struct memory layouts for cache efficiency
-    #[command(name = "tune-layout")]
-    TuneLayout(TuneLayoutArgs),
 
     /// Generate an HTML dashboard report
     #[command(name = "report")]
     Report(ReportArgs),
 
+    /// Group of check commands (Audit, Magic, Advise)
+    #[command(subcommand)]
+    Check(CheckCommands),
+
+    /// Group of performance tuning commands
+    #[command(subcommand)]
+    Tune(TuneCommands),
+
+    /// Group of security and robustness commands
+    #[command(subcommand)]
+    Harden(HardenCommands),
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CheckCommands {
+    /// Audit all targets defined in .covopt.toml
+    Audit,
+    /// Scan Rust files for hardcoded magic numbers
+    #[command(name = "magic")]
+    Magic(ScanMagicArgs),
+    /// Analyze encapsulation quality (Abstraction Penalty & Missing Encapsulation)
+    Advise(AdviseArgs),
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum TuneCommands {
+    /// Performance Parameter Auto-Tuning & Optimization
+    #[command(name = "params")]
+    Params(OptimizeArgs),
+    /// Profile a target to diagnose CPU hotspots and lock contention
+    Profile(ProfileArgs),
+    /// Tune struct memory layouts for cache efficiency
+    #[command(name = "layout")]
+    Layout(TuneLayoutArgs),
     /// Scan for SIMD auto-vectorization opportunities
-    #[command(name = "vectorize")]
     Vectorize(VectorizeArgs),
-
+    /// Inject dynamic PGO (likely/unlikely) probes based on coverage
+    #[command(name = "pgo")]
+    Pgo(PgoInjectArgs),
     /// Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N))
-    #[command(name = "ai-refactor")]
-    AiRefactor(AiRefactorArgs),
+    #[command(name = "refactor")]
+    Refactor(AiRefactorArgs),
+}
 
-    /// Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize)
-    Ci(CiArgs),
+#[derive(Subcommand, Debug, Clone)]
+pub enum HardenCommands {
+    /// Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers)
+    Run(HardenArgs),
+    /// Generate fuzzing harnesses for public functions
+    #[command(name = "fuzz")]
+    Fuzz(GenerateFuzzArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -126,6 +148,17 @@ pub struct AiRefactorArgs {
 }
 
 #[derive(clap::Args, Debug, Clone)]
+pub struct AdviseArgs {
+    /// Target file to analyze
+    #[arg(long)]
+    pub target: String,
+    
+    /// Optional function name to analyze
+    #[arg(long)]
+    pub func: Option<String>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
 pub struct InitArgs {
     /// Optional path to initialize in (defaults to current directory)
     pub path: Option<String>,
@@ -133,6 +166,10 @@ pub struct InitArgs {
     /// Skip interactive prompts and accept default values
     #[arg(short, long)]
     pub yes: bool,
+
+    /// Install a pre-commit hook in the target git repository
+    #[arg(long, default_value_t = false)]
+    pub hook: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -279,79 +316,18 @@ pub struct RunArgs {
 }
 
 fn main() {
+
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Init(args)) => commands::init_config(args),
-        Some(Commands::ScanMagic(args)) => crate::scanner::run_scan(args.path),
-        Some(Commands::Fix) => commands::run_fix(),
-        Some(Commands::InstallHook) => commands::install_hook(),
-        Some(Commands::Audit) => commands::run_audit(),
-        Some(Commands::Harden(args)) => {
-            let mut success = true;
-            let run_all = !args.mutate && !args.fuzz && !args.sanitize;
-
-            if (args.sanitize || run_all)
-                && !harden::run_sanitizer(&args.test, &args.san_type, args.auto_fix)
-            {
-                success = false;
-            }
-            if (args.mutate || run_all) && success && !harden::run_mutants(&args.test) {
-                success = false;
-            }
-            if (args.fuzz || run_all) && success && !harden::run_fuzz(&args.test) {
-                success = false;
-            }
-
-            if !success {
-                std::process::exit(1);
-            }
-        }
-        Some(Commands::Profile(args)) => {
-            if !profiler::run_profile(args.test.as_deref(), args.bin.as_deref(), &args.tool) {
-                std::process::exit(1);
-            }
-        }
-        Some(Commands::Optimize(args)) => {
-            if args.explore {
-                let trait_name = args
-                    .trait_name
-                    .expect("--trait-name is required for explore");
-                explore::run(&args.src, &trait_name, &args.method_name, args.threshold);
-            } else if let Some(params) = &args.params {
-                let opt = parameter_optimizer::ParameterOptimizer::new(
-                    args.test,
-                    params,
-                    args.iterations,
-                );
-                opt.run();
+        Some(Commands::Init(args)) => {
+            if args.hook {
+                commands::install_hook();
             } else {
-                eprintln!("Optimize: Please specify either --explore or --params <PARAMS>.");
-                std::process::exit(1);
+                commands::init_config(args);
             }
         }
-        Some(Commands::GenerateFuzz(args)) => {
-            let engine = auto_harness::AutoHarness::new(&args.target_dir);
-            if let Err(e) = engine.generate() {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
-            }
-        }
-        Some(Commands::PgoInject(args)) => {
-            let cov_map = coverage::CoverageMap::default();
-            let engine = pgo_injector::PgoInjector::new(&args.target_dir, cov_map, args.threshold);
-            if let Err(e) = engine.run() {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
-            }
-        }
-        Some(Commands::TuneLayout(args)) => {
-            let engine = struct_layout::StructLayoutTuner::new(&args.target_dir);
-            if let Err(e) = engine.run() {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
-            }
-        }
+        Some(Commands::Fix) => commands::run_fix(),
         Some(Commands::Report(args)) => {
             let engine = dashboard::DashboardGenerator::new(&args.output_dir);
             if let Err(e) = engine.generate() {
@@ -359,20 +335,99 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Vectorize(args)) => {
-            let engine = auto_simd::AutoSimd::new(&args.target_dir);
-            if let Err(e) = engine.run() {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
+        Some(Commands::Check(cmd)) => match cmd {
+            CheckCommands::Audit => commands::run_audit(),
+            CheckCommands::Magic(args) => crate::scanner::run_scan(args.path),
+            CheckCommands::Advise(args) => {
+                if let Err(e) = commands::run_advise(&args) {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
             }
-        }
-        Some(Commands::AiRefactor(args)) => {
-            let engine = auto_refactor::AutoRefactor::new(&args.target_dir);
-            if let Err(e) = engine.run() {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
+        },
+        Some(Commands::Tune(cmd)) => match cmd {
+            TuneCommands::Params(args) => {
+                if args.explore {
+                    let trait_name = args
+                        .trait_name
+                        .expect("--trait-name is required for explore");
+                    explore::run(&args.src, &trait_name, &args.method_name, args.threshold);
+                } else if let Some(params) = &args.params {
+                    let opt = parameter_optimizer::ParameterOptimizer::new(
+                        args.test,
+                        params,
+                        args.iterations,
+                    );
+                    opt.run();
+                } else {
+                    eprintln!("Optimize: Please specify either --explore or --params <PARAMS>.");
+                    std::process::exit(1);
+                }
             }
-        }
+            TuneCommands::Profile(args) => {
+                if !profiler::run_profile(args.test.as_deref(), args.bin.as_deref(), &args.tool) {
+                    std::process::exit(1);
+                }
+            }
+            TuneCommands::Layout(args) => {
+                let engine = struct_layout::StructLayoutTuner::new(&args.target_dir);
+                if let Err(e) = engine.run() {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+            TuneCommands::Vectorize(args) => {
+                let engine = auto_simd::AutoSimd::new(&args.target_dir);
+                if let Err(e) = engine.run() {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+            TuneCommands::Pgo(args) => {
+                let cov_map = coverage::CoverageMap::default();
+                let engine = pgo_injector::PgoInjector::new(&args.target_dir, cov_map, args.threshold);
+                if let Err(e) = engine.run() {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+            TuneCommands::Refactor(args) => {
+                let engine = auto_refactor::AutoRefactor::new(&args.target_dir);
+                if let Err(e) = engine.run() {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+        },
+        Some(Commands::Harden(cmd)) => match cmd {
+            HardenCommands::Run(args) => {
+                let mut success = true;
+                let run_all = !args.mutate && !args.fuzz && !args.sanitize;
+
+                if (args.sanitize || run_all)
+                    && !harden::run_sanitizer(&args.test, &args.san_type, args.auto_fix)
+                {
+                    success = false;
+                }
+                if (args.mutate || run_all) && success && !harden::run_mutants(&args.test) {
+                    success = false;
+                }
+                if (args.fuzz || run_all) && success && !harden::run_fuzz(&args.test) {
+                    success = false;
+                }
+
+                if !success {
+                    std::process::exit(1);
+                }
+            }
+            HardenCommands::Fuzz(args) => {
+                let engine = auto_harness::AutoHarness::new(&args.target_dir);
+                if let Err(e) = engine.generate() {
+                    eprintln!("CovOpt Error: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+        },
         Some(Commands::Ci(args)) => {
             let config = match config::CovOptConfig::load(".covopt.toml") {
                 Ok(c) => c,

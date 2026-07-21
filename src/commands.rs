@@ -665,22 +665,25 @@ const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google
 - All magic numbers must be uniformly defined using `covopt_parm!`.
 
 ## Available Commands (CovOpt-Analyzer)
-- `covopt audit`: Fast, low-entropy verification checking with quiet checklist output.
-
+- `covopt init`: Initializes a `.covopt.toml` and injects these rules. Use `--hook` to install a pre-commit hook.
+- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize).
 - `covopt fix`: Automatically fix Clippy warnings and formatting.
-- `covopt harden`: Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers). Use `--sanitize --auto-fix` to automate self-healing ReAct compilation loops for memory bugs.
-- `covopt init`: Initializes a `.covopt.toml` and injects these rules into `.agents/AGENTS.md`.
-- `covopt install-hook`: Install a pre-commit hook in the current git repository.
-- `covopt optimize`: Performance Parameter Auto-Tuning & Optimization.
-- `covopt scan-magic`: Scan Rust files for hardcoded magic numbers.
-- `covopt profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
-- `covopt ci`: Unified Auto-Pilot Pipeline (Fix -> Audit -> Optimize -> Harden).
-- `covopt generate-fuzz`: Generate fuzzing harnesses for public functions.
-- `covopt pgo-inject`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
-- `covopt tune-layout`: Tune struct memory layouts for cache efficiency.
 - `covopt report`: Generate an HTML dashboard report.
-- `covopt vectorize`: Scan for SIMD auto-vectorization opportunities.
-- `covopt ai-refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
+
+- `covopt check audit`: Fast, low-entropy verification checking with quiet checklist output.
+- `covopt check magic`: Scan Rust files for hardcoded magic numbers.
+- `covopt check advise`: Advanced qualitative analysis. Detect micro-architectural pipeline stalls, God Functions, and cross-file Semantic Clones.
+
+- `covopt tune params`: Performance Parameter Auto-Tuning & Optimization.
+- `covopt tune profile`: Automatically parses flamegraph SVGs into text-based CPU hotspots for AI tuning.
+- `covopt tune layout`: Tune struct memory layouts for cache efficiency.
+- `covopt tune vectorize`: Scan for SIMD auto-vectorization opportunities.
+- `covopt tune pgo`: Inject dynamic PGO (likely/unlikely) probes based on coverage.
+- `covopt tune refactor`: Scaffold Advanced AI Refactoring (O(N^2) -> O(N log N)).
+
+- `covopt harden run`: Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers). Use `--sanitize --auto-fix` to automate self-healing.
+- `covopt harden fuzz`: Generate fuzzing harnesses for public functions.
+
 - `covopt --test <TEST> --expected <EXPECTED>`: Runs a direct mathematical complexity analysis on a specific test target.
 - `covopt --help`: View all available commands and detailed usage instructions.
 "#;
@@ -789,15 +792,13 @@ require_stress_test = true
         if let Some(start_idx) =
             new_agents_md.find("# CovOpt Optimization & Tuning Rules (Google Antigravity)")
         {
-            if let Some(end_idx) = new_agents_md[start_idx..].find("# ") {
-                if end_idx > 0 {
-                    // There's another rule block after this one
-                    new_agents_md.replace_range(start_idx..(start_idx + end_idx), "");
-                } else {
-                    // It's the only/last rule block
-                    new_agents_md.truncate(start_idx);
-                }
+            // Skip the current header and find the next top-level header (e.g., "\n# ")
+            if let Some(end_offset) = new_agents_md[start_idx + 2..].find("\n# ") {
+                let end_idx = start_idx + 2 + end_offset;
+                // There's another rule block after this one, replace just this block
+                new_agents_md.replace_range(start_idx..end_idx, "");
             } else {
+                // It's the last rule block, truncate from start_idx
                 new_agents_md.truncate(start_idx);
             }
         }
@@ -921,3 +922,138 @@ pub fn run_audit() {
         println!("\n[AUDIT PASSED] All targets passed complexity and coverage checks.");
     }
 }
+
+pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
+    use crate::advisor::EncapsulationAdvisor;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    let target_path = Path::new(&args.target);
+    let mut files_to_analyze = Vec::new();
+
+    if target_path.is_file() {
+        if target_path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            files_to_analyze.push(target_path.to_path_buf());
+        } else {
+            return Err("Target must be a Rust file or a directory".to_string());
+        }
+    } else if target_path.is_dir() {
+        fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        collect_rs_files(&path, files);
+                    } else if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        collect_rs_files(target_path, &mut files_to_analyze);
+    } else {
+        return Err("Target path does not exist".to_string());
+    }
+
+    if files_to_analyze.is_empty() {
+        return Err("No Rust files found to analyze.".to_string());
+    }
+
+    println!("Running Encapsulation Advisor on {} ({} files found)", args.target, files_to_analyze.len());
+
+    // Initialize ASM Extractor
+    use crate::asm_extractor::AsmExtractor;
+    println!("  [Phase 1] Compiling target to extract assembly (--emit=asm)...");
+    let asm_extractor_opt = match std::env::current_dir() {
+        Ok(dir) => {
+            let extractor = AsmExtractor::new(dir);
+            if let Err(e) = extractor.compile_asm() {
+                println!("  [Warning] ASM compilation failed: {}. Continuing with static AST only.", e);
+                None
+            } else {
+                println!("  [OK] Assembly generated successfully.");
+                Some(extractor)
+            }
+        },
+        Err(_) => None,
+    };
+    
+    let mut collected_asm_blocks: Vec<(String, String)> = Vec::new();
+    
+    for file_path in files_to_analyze {
+        let content = match fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let ast = match syn::parse_file(&content) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+
+        for item in ast.items {
+            if let syn::Item::Fn(item_fn) = item {
+                // Skip public functions (often just routing or facades) from analysis
+                if matches!(item_fn.vis, syn::Visibility::Public(_)) {
+                    continue;
+                }
+
+                let name = item_fn.sig.ident.to_string();
+                
+                if let Some(target_func) = &args.func
+                    && &name != target_func {
+                        continue;
+                    }
+                
+                // For now, we run without MCA report (static AST only).
+                let mut asm_block_size = None;
+                let mut mca_report_opt = None;
+                if let Some(ref asm_extractor) = asm_extractor_opt
+                    && let Ok(asm) = asm_extractor.extract_function(&name) {
+                        asm_block_size = Some(asm.len());
+                        collected_asm_blocks.push((name.clone(), asm.clone()));
+                        use crate::mca::McaRunner;
+                        let runner = McaRunner::new(None);
+                        if let Ok(report) = runner.run(&asm) {
+                            mca_report_opt = Some(report);
+                        }
+                    }
+
+                let report = EncapsulationAdvisor::analyze(&item_fn, mca_report_opt.as_ref());
+                
+                if !report.warnings.is_empty() || asm_block_size.is_some() {
+                    println!("\n[File: {} | Function: {}]", file_path.display(), name);
+                    if let Some(size) = asm_block_size {
+                        println!("  - [ASM Extracted] {} bytes of assembly instructions", size);
+                    }
+                    if let Some(mca) = &mca_report_opt {
+                        println!("  - [MCA Report] IPC: {:.2}, Block RThroughput: {:.2}", mca.ipc, mca.block_rthroughput);
+                    }
+                    for w in report.warnings {
+                        println!("  - {}", w);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Phase 3: Semantic Clone Detection
+    if !collected_asm_blocks.is_empty() {
+        println!("\n  [Phase 3] Scanning for Semantic Assembly Clones across {} functions...", collected_asm_blocks.len());
+        let asm_refs: Vec<(&str, &str)> = collected_asm_blocks
+            .iter()
+            .map(|(n, a)| (n.as_str(), a.as_str()))
+            .collect();
+            
+        let clone_warnings = EncapsulationAdvisor::detect_asm_clones(&asm_refs);
+        if clone_warnings.is_empty() {
+            println!("  - No semantic clones detected.");
+        } else {
+            for w in clone_warnings {
+                println!("  - [WARNING] {}", w);
+            }
+        }
+    }
+    
+    Ok(())
+}
+

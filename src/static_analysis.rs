@@ -762,3 +762,46 @@ fn check_crate_root_no_std() -> bool {
     }
     false
 }
+
+struct ComplexityVisitor {
+    pub score: usize,
+}
+
+impl<'ast> Visit<'ast> for ComplexityVisitor {
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        self.score += 1;
+        syn::visit::visit_expr_if(self, node);
+    }
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.score += node.arms.len();
+        syn::visit::visit_expr_match(self, node);
+    }
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.score += 1;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.score += 1;
+        syn::visit::visit_expr_while(self, node);
+    }
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.score += 1;
+        syn::visit::visit_expr_loop(self, node);
+    }
+    fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+        if matches!(node.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) {
+            self.score += 1;
+        }
+        syn::visit::visit_expr_binary(self, node);
+    }
+}
+
+pub fn analyze_complexity(item_fn: &syn::ItemFn) -> usize {
+    let mut visitor = ComplexityVisitor { score: 1 }; // Base complexity is 1
+    visitor.visit_item_fn(item_fn);
+    visitor.score
+}
+
+pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
+    item_fn.sig.inputs.len()
+}

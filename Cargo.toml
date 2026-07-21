@@ -1,6 +1,6 @@
 [package]
 name = "CovOpt-Analyzer"
-version = "1.0.3"
+version = "1.1.0"
 edition = "2024"
 description = "A Coverage-Optimized Complexity Analyzer and Auto-Tuning engine for Rust."
 license = "MIT"
@@ -33,7 +33,6 @@ regex = "1.10.0"
 quote = "1.0"
 rayon = "1.10.0"
 anyhow = "1.0.104"
-
 [profile.dev]
 incremental = false
 split-debuginfo = "unpacked"
