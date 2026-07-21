@@ -76,33 +76,31 @@ rustup component add llvm-tools-preview
 Let's say you have a target crate `my_crate` and you want to test the time complexity of a loop inside `src/lib.rs`.
 
 ### 1. Write the Test
-In `my_crate`, create a simple test that reads `COVOPT_N`:
+In `my_crate`, simply use the `covopt-macro` crate:
 
 ```rust
 // my_crate/src/lib.rs
+use covopt_macro::{test as covopt_test, no_dce, track as covopt_track};
 
+#[no_dce]
 #[inline(never)] // Prevents inlining so LLVM-MCA can analyze the function
-pub fn process_data(n: usize) {
+pub fn process_data(n: usize) -> usize {
     let mut sum = 0;
     for i in 0..n {
-        // CovOpt-Analyzer will automatically discover and track the most heavily hit line!
-        // Use black_box to prevent Dead Code Elimination
-        sum += std::hint::black_box(i);
+        // CovOpt-Analyzer will explicitly anchor to this exact line for hit counting!
+        covopt_track!();
+        sum += i;
     }
-    std::hint::black_box(sum);
+    sum
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_process_complexity() {
-        let n: usize = std::env::var("COVOPT_N")
-            .unwrap_or_else(|_| "10".to_string())
-            .parse()
-            .unwrap();
-            
+    // Automatically generates N loop parsing and complexity assertions
+    #[covopt_test(expected = "ON", n_values = "1000,5000,10000")]
+    fn test_process_complexity(n: usize) {
         process_data(n);
     }
 }
@@ -112,11 +110,7 @@ mod tests {
 Navigate to your `my_crate` directory and run CovOpt-Analyzer:
 
 ```bash
-covopt check audit \
-  --test test_process_complexity \
-  --expected ON \
-  --n-values "1000,5000,10000" \
-  --mca-cpu apple-m1
+covopt check audit --test test_process_complexity --mca-cpu apple-m1
 ```
 
 ### 3. Read the Report
@@ -124,7 +118,7 @@ The tool will automatically handle all compilation and profiling, eventually out
 
 ```text
 Starting CovOpt Analysis for test 'test_process_complexity'...
-[Auto-Discovery] Found peak complexity target at src/lib.rs:85
+Anchored target via covopt_track! at src/lib.rs:11 (process_data)
 Expected Complexity: ON
 Testing N values: [1000, 5000, 10000]
 ---------------------------------------------------

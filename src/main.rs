@@ -1,4 +1,6 @@
+pub mod advisor;
 pub mod analyzer;
+pub mod asm_extractor;
 pub mod auto_fixer;
 pub mod auto_harness;
 pub mod auto_refactor;
@@ -21,9 +23,6 @@ pub mod runner;
 pub mod scanner;
 pub mod static_analysis;
 pub mod struct_layout;
-pub mod advisor;
-pub mod asm_extractor;
-
 
 use clap::{Parser, Subcommand};
 
@@ -152,7 +151,7 @@ pub struct AdviseArgs {
     /// Target file to analyze
     #[arg(long)]
     pub target: String,
-    
+
     /// Optional function name to analyze
     #[arg(long)]
     pub func: Option<String>,
@@ -316,7 +315,6 @@ pub struct RunArgs {
 }
 
 fn main() {
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -385,7 +383,8 @@ fn main() {
             }
             TuneCommands::Pgo(args) => {
                 let cov_map = coverage::CoverageMap::default();
-                let engine = pgo_injector::PgoInjector::new(&args.target_dir, cov_map, args.threshold);
+                let engine =
+                    pgo_injector::PgoInjector::new(&args.target_dir, cov_map, args.threshold);
                 if let Err(e) = engine.run() {
                     eprintln!("CovOpt Error: {:?}", e);
                     std::process::exit(1);

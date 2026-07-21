@@ -1,13 +1,6 @@
 # CovOpt-Macro
 
-`covopt-macro` is a **zero-dependency**, extremely lightweight instrumentation crate for the [CovOpt-Analyzer](https://github.com/hianova/CovOpt-Analyzer) performance tuning ecosystem.
-
-## Overview
-
-In system programming, hardcoded "magic numbers" (like cache thresholds, buffer sizes, retry counts, or batch sizes) limit your ability to optimize your algorithms. CovOpt-Analyzer aims to eliminate these magic numbers to achieve a **Zero-Entropy** architecture.
-
-This crate provides a single, simple declarative macro: `covopt_param!`. 
-It serves as an environment-aware **probe** that allows the external `covopt` CLI engine to dynamically inject and tune performance parameters during benchmarking without modifying your source code.
+`covopt-macro` is a powerful procedural macro crate that provides advanced static analysis, auto-tuning, and anti-DCE capabilities for the [CovOpt-Analyzer](https://github.com/hianova/CovOpt-Analyzer) performance ecosystem.
 
 ## Installation
 
@@ -15,43 +8,89 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-covopt-macro = "1.0"
+covopt-macro = "1.1"
 ```
 
-*Note: This crate has **0 dependencies** and introduces absolutely no overhead in your production binaries.*
+## Features
 
-## Usage
+### 1. `#[covopt::test]` (Complexity Testing)
 
-Replace your magic numbers with the `covopt_param!` macro:
+Wraps your test function in standard Rust test boilerplate while explicitly defining the expected mathematical complexity and testing parameters for the `CovOpt-Analyzer` regression engine.
+
+```rust
+use covopt_macro::test as covopt_test;
+
+#[covopt_test(expected = "ON", n_values = "1000,5000")]
+fn test_my_algorithm(n: usize) {
+    // CovOpt will dynamically test this against N=1000 and N=5000
+    // to mathematically prove it is O(N).
+}
+```
+
+### 2. `#[no_dce]` (Anti-Dead Code Elimination Shield)
+
+Prevents LLVM from aggressively optimizing away your pure, side-effect-free algorithms during `--release` benchmarking. It automatically wraps all inputs and outputs in `std::hint::black_box`.
+
+```rust
+use covopt_macro::no_dce;
+
+#[no_dce]
+fn process(n: usize) -> usize {
+    let mut sum = 0;
+    for i in 0..n {
+        sum += i;
+    }
+    sum
+}
+```
+
+### 3. `covopt_track!()` (Precision Anchoring)
+
+Allows you to explicitly anchor the static hit-count extraction to a specific line in your code, bypassing the heuristic Auto-Discovery engine.
+
+```rust
+use covopt_macro::track as covopt_track;
+
+fn complex_algorithm(n: usize) {
+    for i in 0..n {
+        // CovOpt-Analyzer will lock onto this exact line for hit counting
+        covopt_track!(); 
+    }
+}
+```
+
+### 4. `covopt_param!` (Zero-Entropy Auto-Tuning)
+
+Eliminates hardcoded magic numbers. It serves as an environment-aware probe that allows the external `covopt` CLI engine to dynamically inject and tune performance parameters (like cache sizes or thresholds) during Monte Carlo optimizations.
 
 ```rust
 use covopt_macro::covopt_param;
 
-fn process_data(data: &[u8]) {
-    // Before:
-    // let chunk_size = 1024;
-    
-    // After:
+fn process_data() {
     let chunk_size = covopt_param!("chunk_size", 1024);
-    
-    // ... logic ...
 }
 ```
 
-### How it works
+### 5. `#[derive(SoA)]` (Data-Oriented Design)
 
-1. **Normal Execution** (e.g., `cargo run`, `cargo build --release`):
-   The macro simply evaluates the environment variable (if present). If not present, it safely and instantly falls back to the `$default` value (`1024` in the example).
-   
-2. **Auto-Tuning Execution** (`covopt optimize --params`):
-   When you run the CovOpt-Analyzer CLI tool, it orchestrates a Monte Carlo random walk (or logarithmic discrete diffusion). It will repeatedly inject dynamically generated environment variables (like `COVOPT_PARAM_chunk_size=2048`) and execute your `cargo bench` to find the absolute optimal threshold for your specific hardware.
+Automatically generates a Structure-of-Arrays (SoA) variant for your Array-of-Structures (AoS) definitions, enabling seamless A/B testing of memory layouts.
+
+```rust
+use covopt_macro::SoA;
+
+#[derive(SoA)]
+pub struct Particle {
+    pub x: f32,
+    pub y: f32,
+}
+// Automatically generates:
+// pub struct ParticleSoa { pub x: Vec<f32>, pub y: Vec<f32> }
+```
 
 ## Ecosystem
 
-This crate is just the "probe". To use the tuning engine, you need to install the CLI tool:
+To utilize the full power of these macros (such as parameter tuning and complexity analysis), install the CLI tool:
 
 ```bash
 cargo install covopt-analyzer
 ```
-
-Learn more at the main [CovOpt-Analyzer repository](https://github.com/hianova/CovOpt-Analyzer).

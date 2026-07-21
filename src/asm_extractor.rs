@@ -35,7 +35,10 @@ impl AsmExtractor {
         }
 
         let mut all_s_files = Vec::new();
-        for entry in fs::read_dir(&deps_dir).map_err(|e| e.to_string())?.flatten() {
+        for entry in fs::read_dir(&deps_dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("s") {
                 all_s_files.push(path);
@@ -58,11 +61,15 @@ impl AsmExtractor {
                     if line.starts_with(".globl\t") || line.starts_with(".type\t") {
                         continue;
                     }
-                    
-                    if line.ends_with(':') && !line.starts_with('.') && !line.starts_with("L") && !line.starts_with(".L") {
+
+                    if line.ends_with(':')
+                        && !line.starts_with('.')
+                        && !line.starts_with("L")
+                        && !line.starts_with(".L")
+                    {
                         let label = line.trim_end_matches(':');
                         let demangled = rustc_demangle::demangle(label).to_string();
-                        
+
                         if demangled.contains(func_name) {
                             in_target_func = true;
                             // Add the label itself
@@ -87,6 +94,9 @@ impl AsmExtractor {
             }
         }
 
-        Err(format!("Function '{}' not found in any generated assembly file.", func_name))
+        Err(format!(
+            "Function '{}' not found in any generated assembly file.",
+            func_name
+        ))
     }
 }

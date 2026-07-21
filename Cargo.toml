@@ -33,6 +33,7 @@ regex = "1.10.0"
 quote = "1.0"
 rayon = "1.10.0"
 anyhow = "1.0.104"
+walkdir = "2.5.0"
 [profile.dev]
 incremental = false
 split-debuginfo = "unpacked"

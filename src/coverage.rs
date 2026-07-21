@@ -82,10 +82,17 @@ impl CoverageMap {
     /// Retrieve the hit count for a specific line by matching the end of the filename.
     pub fn find_hit_count(&self, filename_suffix: &str, line_number: u64) -> Option<u64> {
         for (full_path, lines) in &self.hit_counts {
-            if full_path.ends_with(filename_suffix)
-                && let Some(&count) = lines.get(&line_number)
-            {
-                return Some(count);
+            if full_path.ends_with(filename_suffix) {
+                let mut current_line = line_number;
+                while current_line > 0 {
+                    if let Some(&count) = lines.get(&current_line) {
+                        return Some(count);
+                    }
+                    current_line -= 1;
+                    if line_number - current_line > 20 {
+                        break;
+                    }
+                }
             }
         }
         None
@@ -94,10 +101,19 @@ impl CoverageMap {
     /// Retrieve the function symbol for a specific line by matching the end of the filename.
     pub fn find_symbol(&self, filename_suffix: &str, line_number: u64) -> Option<String> {
         for (full_path, symbols) in &self.symbol_map {
-            if full_path.ends_with(filename_suffix)
-                && let Some(sym) = symbols.get(&line_number)
-            {
-                return Some(sym.clone());
+            if full_path.ends_with(filename_suffix) {
+                // Try to find exact match or nearest preceding line
+                let mut current_line = line_number;
+                while current_line > 0 {
+                    if let Some(sym) = symbols.get(&current_line) {
+                        return Some(sym.clone());
+                    }
+                    current_line -= 1;
+                    // Don't search too far back
+                    if line_number - current_line > 20 {
+                        break;
+                    }
+                }
             }
         }
         None

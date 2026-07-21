@@ -58,22 +58,31 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
             return false;
         }
     };
-    let expected_str = match args.expected.as_ref() {
+    let mut ast_expected = None;
+    let mut ast_n_values = None;
+    if args.expected.is_none() || args.n_values.is_none() {
+        if let Some((e, n)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
+            ast_expected = Some(e);
+            ast_n_values = Some(n);
+        }
+    }
+
+    let expected_str = match args.expected.as_ref().or(ast_expected.as_ref()) {
         Some(e) => e,
         None => {
             wlog!(
                 log,
-                "[ERROR] --expected is required or must be configured in .covopt.toml"
+                "[ERROR] --expected is required, must be configured in .covopt.toml, or provided via #[covopt::test(expected = \"...\")]"
             );
             return false;
         }
     };
-    let n_values_str = match args.n_values.as_ref() {
+    let n_values_str = match args.n_values.as_ref().or(ast_n_values.as_ref()) {
         Some(n) => n,
         None => {
             wlog!(
                 log,
-                "[ERROR] --n-values is required or must be configured in .covopt.toml"
+                "[ERROR] --n-values is required, must be configured in .covopt.toml, or provided via #[covopt::test(n_values = \"...\")]"
             );
             return false;
         }
@@ -129,6 +138,40 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 return false;
             }
         };
+
+        if target_symbol.is_none() {
+            let anchor = crate::static_analysis::find_covopt_track_anchor();
+            if let Some((anchor_f, anchor_l)) = anchor {
+                let filename_suffix = std::path::Path::new(&anchor_f)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&anchor_f);
+
+                wlog!(log, "DEBUG: Found anchor at {}:{}", anchor_f, anchor_l);
+
+                if let Some(sym) = map.find_symbol(filename_suffix, anchor_l) {
+                    discovered_target_file = Some(anchor_f.clone());
+                    discovered_target_line = Some(anchor_l);
+                    target_symbol = Some(sym.clone());
+                    wlog!(
+                        log,
+                        "Anchored target via covopt_track! at {}:{} ({})",
+                        anchor_f,
+                        anchor_l,
+                        sym
+                    );
+                } else {
+                    wlog!(
+                        log,
+                        "DEBUG: find_symbol returned None for {}, {}",
+                        filename_suffix,
+                        anchor_l
+                    );
+                }
+            } else {
+                wlog!(log, "DEBUG: find_covopt_track_anchor returned None");
+            }
+        }
 
         if target_symbol.is_none()
             && let Some((f, l, sym, _)) = map.find_peak_location()
@@ -314,13 +357,17 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
             }
         } else {
             static_watchdog_timeout = Some(true); // Treat as passed
-            wlog!(log, "Static Watchdog Timeout: Not Applicable (Pure Function)");
+            wlog!(
+                log,
+                "Static Watchdog Timeout: Not Applicable (Pure Function)"
+            );
         }
     }
 
     let mut static_stress_test = None;
     if args.require_stress_test {
-        let (has_stress, applicable) = static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
+        let (has_stress, applicable) =
+            static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
         static_stress_test = Some(has_stress);
         if applicable {
             if has_stress {
@@ -944,7 +991,9 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                     let path = entry.path();
                     if path.is_dir() {
                         collect_rs_files(&path, files);
-                    } else if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    } else if path.is_file()
+                        && path.extension().and_then(|s| s.to_str()) == Some("rs")
+                    {
                         files.push(path);
                     }
                 }
@@ -959,7 +1008,11 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
         return Err("No Rust files found to analyze.".to_string());
     }
 
-    println!("Running Encapsulation Advisor on {} ({} files found)", args.target, files_to_analyze.len());
+    println!(
+        "Running Encapsulation Advisor on {} ({} files found)",
+        args.target,
+        files_to_analyze.len()
+    );
 
     // Initialize ASM Extractor
     use crate::asm_extractor::AsmExtractor;
@@ -968,18 +1021,21 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
         Ok(dir) => {
             let extractor = AsmExtractor::new(dir);
             if let Err(e) = extractor.compile_asm() {
-                println!("  [Warning] ASM compilation failed: {}. Continuing with static AST only.", e);
+                println!(
+                    "  [Warning] ASM compilation failed: {}. Continuing with static AST only.",
+                    e
+                );
                 None
             } else {
                 println!("  [OK] Assembly generated successfully.");
                 Some(extractor)
             }
-        },
+        }
         Err(_) => None,
     };
-    
+
     let mut collected_asm_blocks: Vec<(String, String)> = Vec::new();
-    
+
     for file_path in files_to_analyze {
         let content = match fs::read_to_string(&file_path) {
             Ok(c) => c,
@@ -998,35 +1054,43 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                 }
 
                 let name = item_fn.sig.ident.to_string();
-                
+
                 if let Some(target_func) = &args.func
-                    && &name != target_func {
-                        continue;
-                    }
-                
+                    && &name != target_func
+                {
+                    continue;
+                }
+
                 // For now, we run without MCA report (static AST only).
                 let mut asm_block_size = None;
                 let mut mca_report_opt = None;
                 if let Some(ref asm_extractor) = asm_extractor_opt
-                    && let Ok(asm) = asm_extractor.extract_function(&name) {
-                        asm_block_size = Some(asm.len());
-                        collected_asm_blocks.push((name.clone(), asm.clone()));
-                        use crate::mca::McaRunner;
-                        let runner = McaRunner::new(None);
-                        if let Ok(report) = runner.run(&asm) {
-                            mca_report_opt = Some(report);
-                        }
+                    && let Ok(asm) = asm_extractor.extract_function(&name)
+                {
+                    asm_block_size = Some(asm.len());
+                    collected_asm_blocks.push((name.clone(), asm.clone()));
+                    use crate::mca::McaRunner;
+                    let runner = McaRunner::new(None);
+                    if let Ok(report) = runner.run(&asm) {
+                        mca_report_opt = Some(report);
                     }
+                }
 
                 let report = EncapsulationAdvisor::analyze(&item_fn, mca_report_opt.as_ref());
-                
+
                 if !report.warnings.is_empty() || asm_block_size.is_some() {
                     println!("\n[File: {} | Function: {}]", file_path.display(), name);
                     if let Some(size) = asm_block_size {
-                        println!("  - [ASM Extracted] {} bytes of assembly instructions", size);
+                        println!(
+                            "  - [ASM Extracted] {} bytes of assembly instructions",
+                            size
+                        );
                     }
                     if let Some(mca) = &mca_report_opt {
-                        println!("  - [MCA Report] IPC: {:.2}, Block RThroughput: {:.2}", mca.ipc, mca.block_rthroughput);
+                        println!(
+                            "  - [MCA Report] IPC: {:.2}, Block RThroughput: {:.2}",
+                            mca.ipc, mca.block_rthroughput
+                        );
                     }
                     for w in report.warnings {
                         println!("  - {}", w);
@@ -1035,15 +1099,18 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
             }
         }
     }
-    
+
     // Phase 3: Semantic Clone Detection
     if !collected_asm_blocks.is_empty() {
-        println!("\n  [Phase 3] Scanning for Semantic Assembly Clones across {} functions...", collected_asm_blocks.len());
+        println!(
+            "\n  [Phase 3] Scanning for Semantic Assembly Clones across {} functions...",
+            collected_asm_blocks.len()
+        );
         let asm_refs: Vec<(&str, &str)> = collected_asm_blocks
             .iter()
             .map(|(n, a)| (n.as_str(), a.as_str()))
             .collect();
-            
+
         let clone_warnings = EncapsulationAdvisor::detect_asm_clones(&asm_refs);
         if clone_warnings.is_empty() {
             println!("  - No semantic clones detected.");
@@ -1053,7 +1120,6 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
             }
         }
     }
-    
+
     Ok(())
 }
-

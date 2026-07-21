@@ -805,3 +805,98 @@ pub fn analyze_complexity(item_fn: &syn::ItemFn) -> usize {
 pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
     item_fn.sig.inputs.len()
 }
+
+pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String)> {
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            name != "target" && name != ".git" && name != ".covopt"
+        })
+        .filter_map(|e| e.ok());
+
+    for entry in walker {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = fs::read_to_string(entry.path()) {
+                if let Ok(ast) = syn::parse_file(&content) {
+                    for item in ast.items {
+                        if let syn::Item::Fn(item_fn) = item {
+                            if item_fn.sig.ident == test_name {
+                                for attr in &item_fn.attrs {
+                                    let path_str = attr
+                                        .path()
+                                        .segments
+                                        .iter()
+                                        .map(|s| s.ident.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("::");
+                                    if path_str == "covopt::test"
+                                        || path_str == "test"
+                                        || path_str == "covopt_macro::test"
+                                        || path_str == "covopt_test"
+                                    {
+                                        if let syn::Meta::List(list) = &attr.meta {
+                                            let mut expected = None;
+                                            let mut n_values = None;
+
+                                            // Quick extraction from stringified tokens
+                                            // Example: expected = "O(N)" , n_values = "10,20"
+                                            let token_str = list.tokens.to_string();
+                                            let parts: Vec<&str> = token_str.split(',').collect();
+                                            for part in parts {
+                                                let kv: Vec<&str> = part.split('=').collect();
+                                                if kv.len() == 2 {
+                                                    let key = kv[0].trim();
+                                                    let val = kv[1].trim().trim_matches('"');
+                                                    if key == "expected" {
+                                                        expected = Some(val.to_string());
+                                                    } else if key == "n_values" {
+                                                        n_values = Some(val.to_string());
+                                                    }
+                                                }
+                                            }
+                                            if let (Some(e), Some(n)) = (expected, n_values) {
+                                                return Some((e, n));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn find_covopt_track_anchor() -> Option<(String, u64)> {
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            name != "target" && name != ".git" && name != ".covopt"
+        })
+        .filter_map(|e| e.ok());
+
+    for entry in walker {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = fs::read_to_string(entry.path()) {
+                for (i, line) in content.lines().enumerate() {
+                    if line.contains("covopt_track!")
+                        || line.contains("covopt::track!")
+                        || line.contains("covopt_macro::track!")
+                    {
+                        // Canonicalize path to help LLVM-COV matching
+                        let full_path = std::fs::canonicalize(entry.path())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| entry.path().to_string_lossy().to_string());
+                        return Some((full_path, (i + 1) as u64));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
