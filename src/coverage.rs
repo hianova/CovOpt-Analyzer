@@ -120,34 +120,63 @@ impl CoverageMap {
     }
 
     /// Finds the location (file, line, symbol, hits) with the maximum hit count across all files.
-    pub fn find_peak_location(&self) -> Option<(String, u64, String, u64)> {
-        let mut peak_hits = 0;
-        let mut peak_loc = None;
+    pub fn find_peak_location(&self, ignore_patterns: &[String]) -> Option<(String, u64, String, u64)> {
+        let mut candidates: Vec<(&String, u64, Option<&String>, u64)> = Vec::new();
 
         for (file, file_hits) in &self.hit_counts {
             for (line, &hits) in file_hits {
-                if hits > peak_hits {
-                    let sym_str = self
-                        .symbol_map
-                        .get(file)
-                        .and_then(|m| m.get(line))
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_string());
+                let sym_opt = self
+                    .symbol_map
+                    .get(file)
+                    .and_then(|m| m.get(line));
 
-                    let demangled = rustc_demangle::demangle(&sym_str).to_string();
-                    if demangled.contains("unlikely")
-                        || demangled.contains("likely")
-                        || demangled.contains("black_box")
-                    {
-                        continue;
-                    }
-
-                    peak_hits = hits;
-                    peak_loc = Some((file.clone(), *line, sym_str, hits));
-                }
+                candidates.push((file, *line, sym_opt, hits));
             }
         }
-        peak_loc
+
+        candidates.sort_by(|a, b| b.3.cmp(&a.3));
+        let unknown_sym = "unknown".to_string();
+
+        for (file, line, sym_opt, hits) in candidates {
+            let sym_str = sym_opt.unwrap_or(&unknown_sym);
+            let demangled = rustc_demangle::demangle(sym_str).to_string();
+            
+            if demangled.contains("unlikely")
+                || demangled.contains("likely")
+                || demangled.contains("black_box")
+            {
+                continue;
+            }
+            if ignore_patterns.iter().any(|pat| demangled.contains(pat)) {
+                continue;
+            }
+            if demangled.contains("ignore") {
+                continue;
+            }
+
+            // Read the source file to check for AST-level #[covopt::ignore] or #![cfg_attr(covopt, ignore)]
+            if let Ok(source) = std::fs::read_to_string(file) {
+                let lines: Vec<&str> = source.lines().collect();
+                let start_idx = line.saturating_sub(20) as usize;
+                let end_idx = (line as usize).min(lines.len());
+                let mut should_ignore = false;
+                for i in start_idx..end_idx {
+                    if let Some(src_line) = lines.get(i) {
+                        if src_line.contains("covopt::ignore") || src_line.contains("cfg_attr(covopt, ignore)") {
+                            should_ignore = true;
+                            break;
+                        }
+                    }
+                }
+                if should_ignore {
+                    continue;
+                }
+            }
+
+            return Some((file.clone(), line, sym_str.clone(), hits));
+        }
+
+        None
     }
 
     /// Calculate the coverage rate for a specific function globally.

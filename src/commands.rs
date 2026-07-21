@@ -210,13 +210,17 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
             }
         }
 
-        if target_symbol.is_none()
-            && let Some((f, l, sym, _)) = map.find_peak_location()
-        {
-            discovered_target_file = Some(f.clone());
-            discovered_target_line = Some(l);
-            target_symbol = Some(sym.clone());
-            wlog!(log, "Auto-discovered target: {}:{} ({})", f, l, sym);
+        if target_symbol.is_none() {
+            let mut ignore_patterns = Vec::new();
+            if let Some(ig_str) = &args.ignore {
+                ignore_patterns.extend(ig_str.split(',').map(|s| s.trim().to_string()));
+            }
+            if let Some((f, l, sym, _)) = map.find_peak_location(&ignore_patterns) {
+                discovered_target_file = Some(f.clone());
+                discovered_target_line = Some(l);
+                target_symbol = Some(sym.clone());
+                wlog!(log, "Auto-discovered target: {}:{} ({})", f, l, sym);
+            }
         }
 
         let hit_count = if let Some(f) = &discovered_target_file {
@@ -801,7 +805,7 @@ pub fn init_config(args: crate::InitArgs) {
             r#"[[target]]
 test = "my_benchmark_test"
 expected = "O(1)"
-n_values = "10,500,10000"
+n_values = "1,500,10000"
 require_cache_padding = true
 require_branch_hints = true
 require_aerospace_grade = {}
@@ -984,6 +988,7 @@ pub fn run_audit() {
             require_watchdog_timeout: target.require_watchdog_timeout,
             require_stress_test: target.require_stress_test,
             polling_threshold: target.polling_threshold,
+            ignore: target.ignore.as_ref().map(|vec| vec.join(",")),
             formalize: false, // Audit defaults to false unless specified
             optimize: false,
         };

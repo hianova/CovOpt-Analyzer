@@ -42,6 +42,7 @@ pub struct TargetConfig {
     pub n_values: Option<String>,
     pub fuzz_iterations: Option<u32>,
     pub mca_cpu: Option<String>,
+    pub ignore: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub require_cache_padding: bool,
     #[serde(default = "default_true")]

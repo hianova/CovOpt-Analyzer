@@ -281,6 +281,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub mca_cpu: Option<String>,
 
+    /// Comma-separated list of symbols to ignore in coverage peak search
+    #[arg(long)]
+    pub ignore: Option<String>,
+
     /// Require static cache padding detection
     #[arg(long, hide = true)]
     pub require_cache_padding: bool,
