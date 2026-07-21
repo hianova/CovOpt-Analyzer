@@ -109,7 +109,11 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
     let executables = if let Some(exes) = workspace_executables {
         exes.to_vec()
     } else {
-        match crate::runner::compile_workspace_tests(&output_dir, &[]) {
+        let mut packages_to_compile = Vec::new();
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(test_name, None) {
+            packages_to_compile.push(pkg);
+        }
+        match crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile) {
             Ok(exes) => exes,
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to compile workspace tests: {}", e);
@@ -945,16 +949,10 @@ pub fn run_audit() {
     
     let mut packages_to_compile = Vec::new();
     for target in &config.target {
-        if let Some(pkg) = &target.package {
-            if !packages_to_compile.contains(pkg) {
-                packages_to_compile.push(pkg.clone());
-            }
-        } else if let Some((_, _, path)) = crate::static_analysis::find_covopt_test_metadata(&target.test) {
-            if let Some(pkg) = crate::static_analysis::find_package_for_file(&path) {
-                if !packages_to_compile.contains(&pkg) {
-                    println!("Auto-discovered test '{}' in package '{}'", target.test, pkg);
-                    packages_to_compile.push(pkg);
-                }
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&target.test, target.package.as_ref()) {
+            if !packages_to_compile.contains(&pkg) {
+                println!("Resolved test '{}' to package '{}'", target.test, pkg);
+                packages_to_compile.push(pkg);
             }
         }
     }

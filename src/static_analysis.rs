@@ -920,3 +920,15 @@ pub fn find_package_for_file(path: &Path) -> Option<String> {
     }
     None
 }
+
+pub fn resolve_package_for_target(test_name: &str, configured_package: Option<&String>) -> Option<String> {
+    if let Some(pkg) = configured_package {
+        return Some(pkg.clone());
+    }
+    if let Some((_, _, path)) = find_covopt_test_metadata(test_name) {
+        if let Some(pkg) = find_package_for_file(&path) {
+            return Some(pkg);
+        }
+    }
+    None
+}

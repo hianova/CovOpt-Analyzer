@@ -70,7 +70,11 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let n_value = 100; // Use a fixed N for fuzzing loops
 
     let output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &[]).unwrap_or_default();
+    let mut packages_to_compile = Vec::new();
+    if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref()) {
+        packages_to_compile.push(pkg);
+    }
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile).unwrap_or_default();
     let runner = crate::runner::CargoTestRunner::new(&config.test, &output_dir, executables);
 
     use rayon::prelude::*;
@@ -155,7 +159,11 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
         .path()
         .to_path_buf();
 
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &[]).unwrap_or_default();
+    let mut packages_to_compile = Vec::new();
+    if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref()) {
+        packages_to_compile.push(pkg);
+    }
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile).unwrap_or_default();
 
     for tc in &test_cases {
         let runner = CargoTestRunner::new(tc, &output_dir, executables.clone());
