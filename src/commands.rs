@@ -989,6 +989,12 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
+                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                    
+                    if file_name.starts_with('.') || file_name == "target" || file_name == "tests" || file_name == "benches" {
+                        continue;
+                    }
+
                     if path.is_dir() {
                         collect_rs_files(&path, files);
                     } else if path.is_file()
@@ -1050,6 +1056,30 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
             if let syn::Item::Fn(item_fn) = item {
                 // Skip public functions (often just routing or facades) from analysis
                 if matches!(item_fn.vis, syn::Visibility::Public(_)) {
+                    continue;
+                }
+
+                // Exclude test and bench functions
+                let mut is_test_or_bench = false;
+                for attr in &item_fn.attrs {
+                    if let syn::Meta::Path(path) = &attr.meta {
+                        if path.is_ident("test") || path.is_ident("bench") {
+                            is_test_or_bench = true;
+                            break;
+                        }
+                    } else if let syn::Meta::List(list) = &attr.meta {
+                         let path_str = list.path.segments.iter()
+                                .map(|s| s.ident.to_string())
+                                .collect::<Vec<_>>()
+                                .join("::");
+                         if path_str.contains("test") || path_str.contains("bench") {
+                             is_test_or_bench = true;
+                             break;
+                         }
+                    }
+                }
+                
+                if is_test_or_bench {
                     continue;
                 }
 
