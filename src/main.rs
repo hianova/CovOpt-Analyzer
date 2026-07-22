@@ -54,6 +54,12 @@ pub enum Commands {
     #[command(name = "report")]
     Report(ReportArgs),
 
+    /// Flat alias for `covopt check audit`
+    Audit(AuditArgs),
+
+    /// Flat alias for `covopt tune profile`
+    Profile(ProfileArgs),
+
     /// Group of check commands (Audit, Magic, Advise)
     #[command(subcommand)]
     Check(CheckCommands),
@@ -70,7 +76,7 @@ pub enum Commands {
 #[derive(Subcommand, Debug, Clone)]
 pub enum CheckCommands {
     /// Audit all targets defined in .covopt.toml
-    Audit,
+    Audit(AuditArgs),
     /// Scan Rust files for hardcoded magic numbers
     #[command(name = "magic")]
     Magic(ScanMagicArgs),
@@ -132,6 +138,25 @@ pub struct TuneLayoutArgs {
 pub struct ReportArgs {
     #[arg(long, default_value = "target/covopt")]
     pub output_dir: String,
+
+    /// Output format (html or sarif)
+    #[arg(long, default_value = "html")]
+    pub format: String,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct AuditArgs {
+    /// The name of the test target to audit
+    #[arg(long)]
+    pub test: Option<String>,
+
+    /// Run in fast mode (only use min and max N values)
+    #[arg(long)]
+    pub fast: bool,
+
+    /// Output report as structured JSON for AI Agents
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -316,6 +341,9 @@ pub struct RunArgs {
     /// Run the discrete diffusion NP-hard solver to superoptimize ASM
     #[arg(long, hide = true)]
     pub optimize: bool,
+    /// Output report as structured JSON for AI Agents
+    #[arg(long)]
+    pub json: bool,
 }
 
 fn main() {
@@ -332,13 +360,24 @@ fn main() {
         Some(Commands::Fix) => commands::run_fix(),
         Some(Commands::Report(args)) => {
             let engine = dashboard::DashboardGenerator::new(&args.output_dir);
-            if let Err(e) = engine.generate() {
+            let res = if args.format == "sarif" {
+                engine.generate_sarif()
+            } else {
+                engine.generate()
+            };
+            if let Err(e) = res {
                 eprintln!("CovOpt Error: {:?}", e);
                 std::process::exit(1);
             }
         }
+        Some(Commands::Audit(args)) => commands::run_audit(args.test, args.fast, args.json),
+        Some(Commands::Profile(args)) => {
+            if !profiler::run_profile(args.test.as_deref(), args.bin.as_deref(), &args.tool) {
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Check(cmd)) => match cmd {
-            CheckCommands::Audit => commands::run_audit(),
+            CheckCommands::Audit(args) => commands::run_audit(args.test, args.fast, args.json),
             CheckCommands::Magic(args) => crate::scanner::run_scan(args.path),
             CheckCommands::Advise(args) => {
                 if let Err(e) = commands::run_advise(&args) {

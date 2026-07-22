@@ -124,4 +124,46 @@ impl DashboardGenerator {
         );
         Ok(())
     }
+
+    pub fn generate_sarif(&self) -> Result<()> {
+        println!("🚀 Generating SARIF v2.1.0 Report...");
+
+        let path = Path::new(&self.output_dir);
+        if !path.exists() {
+            fs::create_dir_all(path).context("Failed to create dashboard output directory")?;
+        }
+
+        let sarif_json = serde_json::json!({
+            "version": "2.1.0",
+            "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "CovOpt-Analyzer",
+                            "informationUri": "https://github.com/hianova/CovOpt-Analyzer",
+                            "version": "1.1.0",
+                            "rules": [
+                                {
+                                    "id": "COVOPT-ENTROPY-001",
+                                    "name": "HighEntropyDetected",
+                                    "shortDescription": { "text": "High Codebase Entropy" },
+                                    "fullDescription": { "text": "The codebase exhibits high entropy (fuzz variance or API sprawl)." },
+                                    "defaultConfiguration": { "level": "warning" }
+                                }
+                            ]
+                        }
+                    },
+                    "results": []
+                }
+            ]
+        });
+
+        let sarif_path = path.join("covopt.sarif");
+        fs::write(&sarif_path, serde_json::to_string_pretty(&sarif_json)?)
+            .context("Failed to write SARIF file")?;
+
+        println!("✅ SARIF report written to {:?}", sarif_path);
+        Ok(())
+    }
 }

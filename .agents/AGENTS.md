@@ -36,6 +36,7 @@ RTK filters and compresses command output before it reaches the LLM context, sav
 Testing 123
 
 
+
 # CovOpt Optimization & Tuning Rules (Google Antigravity)
 
 **Usage**: AI Agent instructions for performance verification and parameter tuning.

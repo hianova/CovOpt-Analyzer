@@ -17,6 +17,7 @@ Instead of relying on fragile execution time measurements (like `criterion` or `
 - **Automated Stress Testing**: Automatically instruments your binaries, injects `COVOPT_N` environment variables, generates `.profraw` data, merges them, and exports LLVM JSON profiles.
 - **LLM-Powered Auto-Fix** (`covopt harden run --sanitize --auto-fix`): Connects with Gemini or local LLM servers (Ollama/LM Studio) to automatically patch safety leaks caught by sanitizers.
 - **Unified Auto-Pilot CI** (`covopt ci`): A fully integrated pipeline that automatically runs `fix`, `audit`, `optimize`, and `harden` in sequence based on your `.covopt.toml` configuration. Achieves perfect **Zero-Entropy** maintenance.
+- **CI/CD Native & Agent Ready**: Built-in support for generating SARIF reports (`covopt report --format sarif`) and structured JSON outputs (`covopt audit --json`) for autonomous coding agents.
 
 ---
 
@@ -26,13 +27,14 @@ Depending on whether you are running `covopt` manually in a terminal, or configu
 
 ### 🧑 For Humans (Interactive Development)
 - **Harden & Secure (`covopt harden run`)**: Interactively fuzz your functions, inject mutations, or run sanitizers to find loopholes in test assertions.
+- **ASCII Visualizations (`covopt audit`)**: Instantly draws visual complexity curves directly in the terminal when algorithms degrade, bypassing the need for an HTML dashboard.
 - **Visualize Hotspots (`covopt tune profile --tool flamegraph`)**: Profile your CPU hotspots and analyze lock contention using interactive flamegraphs.
 - **Parameter Optimization (`covopt tune params`)**: Auto-tune performance parameters to find the most optimal configuration.
 
 ### 🤖 For AI Agents (Automated Pipelines & CI)
 - **Zero-Warning Pipeline (`covopt ci`)**: Run the fully automated CI pipeline to execute fixes, audits, and parameter tunings in one shot.
-- **Clutter-Free Checks (`covopt check audit`)**: Runs all checks defined in `.covopt.toml` compactly. Suppresses noisy cargo build logs and intermediate test execution lines to keep agent context clean. Only reports anomalies or entropy threshold violations.
-- **CPU Optimization (`covopt tune profile`)**: Automatically parses the generated `flamegraph.svg` into clean, text-based CPU hotspots and statistics.
+- **Agent JSON APIs (`covopt audit --json`)**: Emits pure structural JSON containing entropy scores and complexity boundaries for automated agents to parse programmatically without scraping logs.
+- **CI/CD Integration (`covopt report --format sarif`)**: Generates SARIF v2.1.0 payloads for automatic PR annotations in GitHub Actions or Azure DevOps.
 - **Self-Healing Loop (`covopt harden run --sanitize --auto-fix`)**: Hook `covopt` with the agent's LLM environment to automatically patch memory bugs.
 
 ---

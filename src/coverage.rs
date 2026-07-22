@@ -134,7 +134,7 @@ impl CoverageMap {
             }
         }
 
-        candidates.sort_by(|a, b| b.3.cmp(&a.3));
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.3));
         let unknown_sym = "unknown".to_string();
 
         for (file, line, sym_opt, hits) in candidates {

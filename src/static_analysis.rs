@@ -932,3 +932,57 @@ pub fn resolve_package_for_target(test_name: &str, configured_package: Option<&S
     }
     None
 }
+
+
+pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
+    use walkdir::WalkDir;
+    let mut results = Vec::new();
+    for entry in WalkDir::new("src").into_iter().chain(WalkDir::new("tests").into_iter()).filter_map(|e| e.ok()) {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(file_content) = std::fs::read_to_string(entry.path()) {
+                if file_content.contains("#[covopt::test") {
+                    if let Ok(ast) = syn::parse_file(&file_content) {
+                        for item in ast.items {
+                            if let syn::Item::Fn(item_fn) = item {
+                                let has_attr = item_fn.attrs.iter().any(|attr| {
+                                    attr.path().segments.last().map(|s| s.ident.to_string()) == Some("test".to_string())
+                                });
+                                if has_attr {
+                                    let mut expected = "O(1)".to_string();
+                                    let mut n_values = "1,100,1000".to_string();
+                                    for attr in item_fn.attrs {
+                                        if let syn::Meta::List(meta) = &attr.meta {
+                                            let tokens = quote::quote!(#meta).to_string();
+                                            if tokens.contains("expected") {
+                                                if let Some(pos) = tokens.find("expected") {
+                                                    let rest = &tokens[pos..];
+                                                    if let Some(start) = rest.find('"') {
+                                                        if let Some(end) = rest[start+1..].find('"') {
+                                                            expected = rest[start+1..start+1+end].to_string();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if tokens.contains("n_values") {
+                                                if let Some(pos) = tokens.find("n_values") {
+                                                    let rest = &tokens[pos..];
+                                                    if let Some(start) = rest.find('"') {
+                                                        if let Some(end) = rest[start+1..].find('"') {
+                                                            n_values = rest[start+1..start+1+end].to_string();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    results.push((item_fn.sig.ident.to_string(), expected, n_values));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
+}

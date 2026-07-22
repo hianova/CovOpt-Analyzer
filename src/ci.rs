@@ -14,10 +14,9 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
         println!("✅ [CI OK] Fix complete.");
     }
 
-    // Step 2: Core Audit
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit();
+        commands::run_audit(None, false, false);
         println!("✅ [CI OK] Audit passed.");
     }
 

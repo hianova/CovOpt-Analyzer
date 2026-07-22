@@ -316,6 +316,18 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
             expected,
             report.actual_trend
         );
+        wlog!(log, "--- ASCII Curve Visualization ---");
+        let max_h = data.iter().map(|&(_, h)| h).max().unwrap_or(1) as f64;
+        let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1) as f64;
+        for &(n, h) in &data {
+            let n_bar_len = ((n as f64 / max_n) * 40.0) as usize;
+            let h_bar_len = ((h as f64 / max_h) * 40.0) as usize;
+            let n_bar = "=".repeat(n_bar_len);
+            let h_bar = "*".repeat(h_bar_len);
+            wlog!(log, "N: {:<6} | {}", n, n_bar);
+            wlog!(log, "H: {:<6} | {}", h, h_bar);
+            wlog!(log, "--------------------------------");
+        }
         success = false;
     }
 
@@ -801,8 +813,13 @@ pub fn init_config(args: crate::InitArgs) {
             input.trim().eq_ignore_ascii_case("y")
         };
 
-        let default_config = format!(
-            r#"[[target]]
+        let mut default_config = String::new();
+        let found_tests = crate::static_analysis::find_all_covopt_tests();
+        
+        if found_tests.is_empty() {
+            println!("CovOpt-Analyzer: No #[covopt::test] found. Creating default template.");
+            default_config.push_str(&format!(
+                r#"[[target]]
 test = "my_benchmark_test"
 expected = "O(1)"
 n_values = "1,500,10000"
@@ -812,8 +829,27 @@ require_aerospace_grade = {}
 require_watchdog_timeout = true
 require_stress_test = true
 "#,
-            require_aerospace
-        );
+                require_aerospace
+            ));
+        } else {
+            println!("CovOpt-Analyzer: Auto-discovered {} test(s). Generating config.", found_tests.len());
+            for (test_name, exp, n_vals) in found_tests {
+                default_config.push_str(&format!(
+                    r#"[[target]]
+test = "{}"
+expected = "{}"
+n_values = "{}"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = {}
+require_watchdog_timeout = true
+require_stress_test = true
+
+"#,
+                    test_name, exp, n_vals, require_aerospace
+                ));
+            }
+        }
 
         if let Err(e) = std::fs::write(&config_path, default_config) {
             eprintln!("Failed to write .covopt.toml: {}", e);
@@ -929,7 +965,7 @@ pub fn run_fix() {
     }
 }
 
-pub fn run_audit() {
+pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
     unsafe {
         std::env::set_var("COVOPT_COMPACT", "1");
     }
@@ -975,8 +1011,27 @@ pub fn run_audit() {
         }
     };
 
+
+    let mut json_results = serde_json::json!({
+        "status": "success",
+        "targets": []
+    });
     let mut all_success = true;
-    for target in config.target {
+
+    for mut target in config.target {
+        if let Some(tt) = &target_test {
+            if &target.test != tt {
+                continue;
+            }
+        }
+        if fast {
+            if let Some(n_vals) = &target.n_values {
+                let parts: Vec<&str> = n_vals.split(',').collect();
+                if parts.len() > 2 {
+                    target.n_values = Some(format!("{},{}", parts.first().unwrap(), parts.last().unwrap()));
+                }
+            }
+        }
         let args = RunArgs {
             test: Some(target.test.clone()),
             expected: target.expected.clone(),
@@ -991,6 +1046,7 @@ pub fn run_audit() {
             ignore: target.ignore.as_ref().map(|vec| vec.join(",")),
             formalize: false, // Audit defaults to false unless specified
             optimize: false,
+            json: is_json,
         };
         println!("\n===================================================");
         println!("Auditing target: {}", target.test);
@@ -1029,6 +1085,33 @@ pub fn run_audit() {
             println!("  [OK] Low Entropy. Code is well encapsulated and stable.");
         }
         println!("===================================");
+
+        if is_json {
+            if let Some(arr) = json_results.get_mut("targets").and_then(|t| t.as_array_mut()) {
+                arr.push(serde_json::json!({
+                    "test": target.test,
+                    "entropy": {
+                        "fuzz_variance": entropy_result.fuzz_variance_score,
+                        "branch_sprawl": entropy_result.branch_sprawl_score,
+                        "cli_noise": entropy_result.cli_noise_score,
+                        "total": entropy_result.total_score
+                    },
+                    "passed": entropy_result.total_score <= 50.0
+                }));
+            }
+        }
+    }
+
+
+    if is_json {
+        if !all_success {
+            json_results["status"] = serde_json::json!("failed");
+        }
+        println!("{}", serde_json::to_string_pretty(&json_results).unwrap());
+        if !all_success {
+            std::process::exit(1);
+        }
+        return;
     }
 
     if !all_success {
@@ -1195,7 +1278,14 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                         println!("  - {}", w);
                     }
                 }
-            }
+            } else if let syn::Item::Struct(item_struct) = item {
+                let report = EncapsulationAdvisor::analyze_struct(&item_struct);
+                if !report.warnings.is_empty() {
+                    println!("\n[File: {} | Struct: {}]", file_path.display(), item_struct.ident);
+                    for warning in report.warnings {
+                        println!("  - {}", warning);
+                    }
+                }
         }
     }
 
@@ -1220,5 +1310,6 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    }
+Ok(())
 }

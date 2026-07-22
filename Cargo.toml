@@ -15,8 +15,11 @@ members = ["covopt-macro"]
 
 
 [[bin]]
-name = "covopt"
+name = "cargo-covopt"
 path = "src/main.rs"
+
+[dev-dependencies]
+covopt-macro = { path = "covopt-macro" }
 
 [dependencies]
 spin = "0.9"
