@@ -745,6 +745,60 @@ pub fn analyze_stress_test(source_file: &Path) -> (bool, bool) {
     (false, true)
 }
 
+fn scan_tests_dir_for_feature<F>(dir: &Path, check_fn: &F) -> bool
+where
+    F: Fn(&Path) -> (bool, bool),
+{
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if scan_tests_dir_for_feature(&path, check_fn) {
+                    return true;
+                }
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let (has_feature, _) = check_fn(&path);
+                if has_feature {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn analyze_project_stress_test(target_file: &Path) -> (bool, bool) {
+    let (has_stress, applicable) = analyze_stress_test(target_file);
+    if has_stress || !applicable {
+        return (has_stress, applicable);
+    }
+    
+    let tests_dir = Path::new("tests");
+    if tests_dir.exists() && tests_dir.is_dir() {
+        let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_stress_test);
+        if found_in_tests {
+            return (true, true);
+        }
+    }
+    (false, true)
+}
+
+pub fn analyze_project_watchdog_timeout(target_file: &Path) -> (bool, bool) {
+    let (has_wd, applicable) = analyze_watchdog_timeout(target_file);
+    if has_wd || !applicable {
+        return (has_wd, applicable);
+    }
+    
+    let tests_dir = Path::new("tests");
+    if tests_dir.exists() && tests_dir.is_dir() {
+        let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_watchdog_timeout);
+        if found_in_tests {
+            return (true, true);
+        }
+    }
+    (false, true)
+}
+
 fn check_crate_root_no_std() -> bool {
     let roots = ["src/lib.rs", "src/main.rs"];
     for root in roots {

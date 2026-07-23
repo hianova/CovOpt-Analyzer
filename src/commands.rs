@@ -399,7 +399,7 @@ pub fn run_analysis(
     let mut static_watchdog_timeout = None;
     if args.require_watchdog_timeout {
         let (has_watchdog, applicable) =
-            static_analysis::analyze_watchdog_timeout(std::path::Path::new(&target_file));
+            static_analysis::analyze_project_watchdog_timeout(std::path::Path::new(&target_file));
         static_watchdog_timeout = Some(has_watchdog);
         if applicable {
             if has_watchdog {
@@ -423,7 +423,7 @@ pub fn run_analysis(
     let mut static_stress_test = None;
     if args.require_stress_test {
         let (has_stress, applicable) =
-            static_analysis::analyze_stress_test(std::path::Path::new(&target_file));
+            static_analysis::analyze_project_stress_test(std::path::Path::new(&target_file));
         static_stress_test = Some(has_stress);
         if applicable {
             if has_stress {
