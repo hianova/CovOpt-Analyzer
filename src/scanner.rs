@@ -45,10 +45,66 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
         // Delegate to the default impl to visit any nested expressions (though literals don't have them)
         visit::visit_expr_lit(self, node);
     }
+
+    fn visit_generic_argument(&mut self, _node: &'ast syn::GenericArgument) {
+        // Skip scanning magic numbers in const generics (e.g. Arena<K, V, 128>)
+    }
+
+    fn visit_type_array(&mut self, node: &'ast syn::TypeArray) {
+        // Skip the length part of [T; N]
+        visit::visit_type(self, &*node.elem);
+    }
+
+    fn visit_expr_repeat(&mut self, node: &'ast syn::ExprRepeat) {
+        // Skip the length part of [expr; N]
+        visit::visit_expr(self, &*node.expr);
+    }
+
+    fn visit_item_const(&mut self, _node: &'ast syn::ItemConst) {
+        // Skip global const declarations
+    }
 }
 
-pub fn run_scan(path: Option<String>, auto_fix: bool) {
+pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let start_dir = path.unwrap_or_else(|| ".".to_string());
+    
+    if restore {
+        let backup_dir = Path::new(".covopt_backup");
+        if backup_dir.exists() {
+            println!("Restoring files from .covopt_backup/...");
+            let mut restored = 0;
+            
+            fn restore_recursive(current_dir: &Path, base_backup: &Path, base_target: &Path, count: &mut usize) {
+                if let Ok(entries) = fs::read_dir(current_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            restore_recursive(&path, base_backup, base_target, count);
+                        } else if path.is_file() {
+                            if let Ok(relative) = path.strip_prefix(base_backup) {
+                                let target = base_target.join(relative);
+                                if let Some(parent) = target.parent() {
+                                    let _ = fs::create_dir_all(parent);
+                                }
+                                if fs::copy(&path, &target).is_ok() {
+                                    println!("Restored: {}", target.display());
+                                    *count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            restore_recursive(backup_dir, backup_dir, Path::new(&start_dir), &mut restored);
+            let _ = fs::remove_dir_all(backup_dir);
+            println!("✅ Successfully restored {} files.", restored);
+        } else {
+            println!("No .covopt_backup/ directory found. Nothing to restore.");
+        }
+        return;
+    }
+
     let mut files_to_scan = Vec::new();
     collect_rs_files(Path::new(&start_dir), &mut files_to_scan);
 
@@ -108,6 +164,22 @@ pub fn run_scan(path: Option<String>, auto_fix: bool) {
                 }
 
                 if file_changed {
+                    // Backup the original file before modifying
+                    let backup_base = Path::new(".covopt_backup");
+                    let file_path_obj = Path::new(&file_path);
+                    let backup_path = if let Ok(relative) = file_path_obj.strip_prefix(Path::new(&start_dir)) {
+                        backup_base.join(relative)
+                    } else {
+                        backup_base.join(file_path_obj.file_name().unwrap())
+                    };
+                    
+                    if let Some(parent) = backup_path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if !backup_path.exists() {
+                        let _ = fs::copy(&file_path, &backup_path);
+                    }
+
                     // Add `use covopt_macro::covopt_param;` at the top if not present
                     if !lines
                         .iter()
