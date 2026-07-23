@@ -18,6 +18,10 @@ members = ["covopt-macro"]
 name = "cargo-covopt"
 path = "src/main.rs"
 
+[[bin]]
+name = "covopt"
+path = "src/main.rs"
+
 [dev-dependencies]
 covopt-macro = { path = "covopt-macro" }
 

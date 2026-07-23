@@ -351,7 +351,12 @@ pub struct RunArgs {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let mut args: Vec<String> = std::env::args().collect();
+    // If run as `cargo covopt`, cargo passes `covopt` as the first argument. We strip it.
+    if args.len() > 1 && args[1] == "covopt" {
+        args.remove(1);
+    }
+    let cli = Cli::parse_from(args);
 
     match cli.command {
         Some(Commands::Init(args)) => {
