@@ -17,12 +17,12 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
 
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit(None, false, false);
+        commands::run_audit(None, args.fast, false);
         println!("✅ [CI OK] Audit passed.");
     }
 
     // Step 3: Optimize
-    if config.pipeline.run_optimize {
+    if config.pipeline.run_optimize && !args.fast {
         println!("▶️ Step 3: Running `covopt optimize` (Auto-Tuning)...");
         for target_config in &config.target {
             println!("  -> Optimizing target: {}", target_config.test);
@@ -35,10 +35,12 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
             );
         }
         println!("✅ [CI OK] Optimization complete.");
+    } else if config.pipeline.run_optimize && args.fast {
+        println!("⏭️ [CI Skip] Skipping optimize step in fast mode.");
     }
 
     // Step 4: Harden (if configured)
-    if config.pipeline.run_harden && !args.skip_harden {
+    if config.pipeline.run_harden && !args.skip_harden && !args.fast {
         println!("▶️ Step 4: Running `covopt harden`...");
         let mut success = true;
         for target_config in &config.target {
@@ -60,6 +62,8 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
         } else {
             println!("✅ [CI OK] Hardening complete.");
         }
+    } else if config.pipeline.run_harden && (!args.skip_harden) && args.fast {
+        println!("⏭️ [CI Skip] Skipping harden step in fast mode.");
     }
 
     println!("===================================================");

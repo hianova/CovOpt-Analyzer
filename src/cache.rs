@@ -71,11 +71,10 @@ pub fn load_mca_cache(file_path: &Path, symbol: &str) -> Option<McaReport> {
     let file_key = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf()).to_string_lossy().into_owned();
     let hash = compute_file_hash(file_path);
     let proj_cache = ProjectCache::load();
-    if let Some(file_cache) = proj_cache.files.get(&file_key) {
-        if file_cache.file_hash == hash {
+    if let Some(file_cache) = proj_cache.files.get(&file_key)
+        && file_cache.file_hash == hash {
             return file_cache.mca_reports.get(symbol).cloned();
         }
-    }
     None
 }
 

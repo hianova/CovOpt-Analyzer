@@ -290,6 +290,10 @@ pub struct CiArgs {
     /// Fail the CI if any step produces a non-perfect result
     #[arg(long, default_value_t = false)]
     pub strict: bool,
+
+    /// Run in fast mode (skips heavy tuning/fuzzing and uses fast audit)
+    #[arg(long, default_value_t = false)]
+    pub fast: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]

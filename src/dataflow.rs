@@ -17,7 +17,7 @@ struct LockEscapeScanner {
 
 impl<'ast> Visit<'ast> for LockEscapeScanner {
     fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-        if node.method.to_string() == "lock" {
+        if node.method == "lock" {
             self.has_lock = true;
         }
         visit::visit_expr_method_call(self, node);
@@ -95,8 +95,8 @@ impl<'ast> Visit<'ast> for DataflowScanner {
 
 pub fn analyze_file(file_path: &Path) -> Vec<String> {
     let mut all_warnings = Vec::new();
-    if let Ok(content) = fs::read_to_string(file_path) {
-        if let Ok(syntax_tree) = syn::parse_file(&content) {
+    if let Ok(content) = fs::read_to_string(file_path)
+        && let Ok(syntax_tree) = syn::parse_file(&content) {
             let mut scanner = DataflowScanner {
                 file_path: file_path.to_string_lossy().into_owned(),
                 func_name: String::new(),
@@ -106,7 +106,6 @@ pub fn analyze_file(file_path: &Path) -> Vec<String> {
             scanner.visit_file(&syntax_tree);
             all_warnings = scanner.warnings;
         }
-    }
     all_warnings
 }
 

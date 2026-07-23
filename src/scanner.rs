@@ -52,12 +52,12 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
 
     fn visit_type_array(&mut self, node: &'ast syn::TypeArray) {
         // Skip the length part of [T; N]
-        visit::visit_type(self, &*node.elem);
+        visit::visit_type(self, &node.elem);
     }
 
     fn visit_expr_repeat(&mut self, node: &'ast syn::ExprRepeat) {
         // Skip the length part of [expr; N]
-        visit::visit_expr(self, &*node.expr);
+        visit::visit_expr(self, &node.expr);
     }
 
     fn visit_item_const(&mut self, _node: &'ast syn::ItemConst) {
@@ -80,8 +80,8 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         let path = entry.path();
                         if path.is_dir() {
                             restore_recursive(&path, base_backup, base_target, count);
-                        } else if path.is_file() {
-                            if let Ok(relative) = path.strip_prefix(base_backup) {
+                        } else if path.is_file()
+                            && let Ok(relative) = path.strip_prefix(base_backup) {
                                 let target = base_target.join(relative);
                                 if let Some(parent) = target.parent() {
                                     let _ = fs::create_dir_all(parent);
@@ -91,7 +91,6 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                                     *count += 1;
                                 }
                             }
-                        }
                     }
                 }
             }
