@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::process::Command;
 
 pub fn run_profile(test_name: Option<&str>, bin_name: Option<&str>, tool: &str) -> bool {
@@ -83,8 +84,8 @@ fn parse_and_print_svg_bottlenecks() {
             let abs_start = search_from + start_idx;
             if let Some(end_idx) = line[abs_start..].find("</title>") {
                 let abs_end = abs_start + end_idx;
-                let inner = &line[abs_start + 7..abs_end];
-                search_from = abs_end + 8;
+                let inner = &line[abs_start + covopt_param!("M_86_46", 7)..abs_end];
+                search_from = abs_end + covopt_param!("M_87_40", 8);
 
                 if inner == "all" || inner.starts_with("all (") {
                     continue;
@@ -96,7 +97,8 @@ fn parse_and_print_svg_bottlenecks() {
 
                     if let Some(comma_idx) = stats.find(" samples, ") {
                         let samples_str = &stats[0..comma_idx].replace(",", "");
-                        let pct_str = &stats[comma_idx + 10..stats.len() - 1]; // "Y" without %
+                        let pct_str =
+                            &stats[comma_idx + covopt_param!("M_99_57", 10)..stats.len() - 1]; // "Y" without %
 
                         if let (Ok(samples), Ok(pct)) =
                             (samples_str.parse::<u64>(), pct_str.parse::<f64>())
@@ -120,7 +122,11 @@ fn parse_and_print_svg_bottlenecks() {
 
     println!("\n🔥 Top 5 CPU Hotspots (Actionable Guidance):");
     println!("---------------------------------------------------");
-    for (i, (name, samples, pct)) in hotspots.iter().take(5).enumerate() {
+    for (i, (name, samples, pct)) in hotspots
+        .iter()
+        .take(covopt_param!("M_123_58", 5))
+        .enumerate()
+    {
         println!("{}. {} - {} samples ({:.1}%)", i + 1, name, samples, pct);
     }
     println!("---------------------------------------------------");

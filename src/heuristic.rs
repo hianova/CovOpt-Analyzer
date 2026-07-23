@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,8 +22,8 @@ impl AstNode {
             AstNode::Mul(l, r) => l.evaluate(n) * r.evaluate(n),
             AstNode::Div(l, r) => {
                 let den = r.evaluate(n);
-                if den.abs() < 1e-9 {
-                    1e9
+                if den.abs() < covopt_param!("M_24_31", 1e-9) {
+                    covopt_param!("M_25_20", 1e9)
                 } else {
                     l.evaluate(n) / den
                 }
@@ -32,33 +33,35 @@ impl AstNode {
     }
 
     pub fn mutate(&mut self, seed: &mut usize) {
-        *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        let rand = *seed % 100;
+        *seed = seed
+            .wrapping_mul(covopt_param!("M_35_34", 1664525))
+            .wrapping_add(covopt_param!("M_35_56", 1013904223));
+        let rand = *seed % covopt_param!("M_36_27", 100);
 
         match self {
             AstNode::Constant(c) => {
-                if rand < 50 {
-                    *c += 0.5;
+                if rand < covopt_param!("M_40_26", 50) {
+                    *c += covopt_param!("M_41_26", 0.5);
                 } else {
-                    *c -= 0.5;
+                    *c -= covopt_param!("M_43_26", 0.5);
                 }
             }
             AstNode::Pow(_, p) => {
-                if rand < 50 {
+                if rand < covopt_param!("M_47_26", 50) {
                     *p += 1.0;
                 } else {
                     *p -= 1.0;
                 }
             }
             AstNode::Add(l, r) | AstNode::Sub(l, r) | AstNode::Mul(l, r) | AstNode::Div(l, r) => {
-                if rand < 50 {
+                if rand < covopt_param!("M_54_26", 50) {
                     l.mutate(seed);
                 } else {
                     r.mutate(seed);
                 }
             }
             AstNode::N => {
-                if rand < 10 {
+                if rand < covopt_param!("M_61_26", 10) {
                     *self = AstNode::Constant(1.0);
                 }
             }
@@ -106,13 +109,15 @@ impl SymbolicRegressor {
 
         let mut best_ast = pool[0].clone();
         let mut min_error = f64::MAX;
-        let mut seed: usize = 12345;
+        let mut seed: usize = covopt_param!("M_109_30", 12345);
 
-        for _generation in 0..5000 {
+        for _generation in 0..covopt_param!("M_111_30", 5000) {
             for ast in &mut pool {
                 // Mutate some trees
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                if seed % 10 < 3 {
+                seed = seed
+                    .wrapping_mul(covopt_param!("M_114_41", 1664525))
+                    .wrapping_add(covopt_param!("M_114_63", 1013904223));
+                if seed % covopt_param!("M_115_26", 10) < covopt_param!("M_115_31", 3) {
                     let mut new_ast = ast.clone();
                     new_ast.mutate(&mut seed);
                     *ast = new_ast;

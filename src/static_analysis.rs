@@ -816,12 +816,12 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Pat
         .filter_map(|e| e.ok());
 
     for entry in walker {
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
-                if let Ok(ast) = syn::parse_file(&content) {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+            && let Ok(content) = fs::read_to_string(entry.path())
+                && let Ok(ast) = syn::parse_file(&content) {
                     for item in ast.items {
-                        if let syn::Item::Fn(item_fn) = item {
-                            if item_fn.sig.ident == test_name {
+                        if let syn::Item::Fn(item_fn) = item
+                            && item_fn.sig.ident == test_name {
                                 for attr in &item_fn.attrs {
                                     let path_str = attr
                                         .path()
@@ -830,12 +830,11 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Pat
                                         .map(|s| s.ident.to_string())
                                         .collect::<Vec<_>>()
                                         .join("::");
-                                    if path_str == "covopt::test"
+                                    if (path_str == "covopt::test"
                                         || path_str == "test"
                                         || path_str == "covopt_macro::test"
-                                        || path_str == "covopt_test"
-                                    {
-                                        if let syn::Meta::List(list) = &attr.meta {
+                                        || path_str == "covopt_test")
+                                        && let syn::Meta::List(list) = &attr.meta {
                                             let mut expected = None;
                                             let mut n_values = None;
 
@@ -859,14 +858,10 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Pat
                                                 return Some((e, n, entry.path().to_path_buf()));
                                             }
                                         }
-                                    }
                                 }
                             }
-                        }
                     }
                 }
-            }
-        }
     }
     None
 }
@@ -881,8 +876,8 @@ pub fn find_covopt_track_anchor() -> Option<(String, u64)> {
         .filter_map(|e| e.ok());
 
     for entry in walker {
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+            && let Ok(content) = fs::read_to_string(entry.path()) {
                 for (i, line) in content.lines().enumerate() {
                     if line.contains("covopt_track!")
                         || line.contains("covopt::track!")
@@ -896,7 +891,6 @@ pub fn find_covopt_track_anchor() -> Option<(String, u64)> {
                     }
                 }
             }
-        }
     }
     None
 }
@@ -905,47 +899,49 @@ pub fn find_package_for_file(path: &Path) -> Option<String> {
     let mut current_dir = path.parent();
     while let Some(dir) = current_dir {
         let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            if let Ok(content) = fs::read_to_string(&cargo_toml) {
-                if let Ok(value) = content.parse::<toml::Value>() {
-                    if let Some(pkg) = value.get("package") {
-                        if let Some(name) = pkg.get("name").and_then(|n| n.as_str()) {
+        if cargo_toml.exists()
+            && let Ok(content) = fs::read_to_string(&cargo_toml)
+                && let Ok(value) = content.parse::<toml::Value>()
+                    && let Some(pkg) = value.get("package")
+                        && let Some(name) = pkg.get("name").and_then(|n| n.as_str()) {
                             return Some(name.to_string());
                         }
-                    }
-                }
-            }
-        }
         current_dir = dir.parent();
     }
     None
 }
 
-pub fn resolve_package_for_target(test_name: &str, configured_package: Option<&String>) -> Option<String> {
+pub fn resolve_package_for_target(
+    test_name: &str,
+    configured_package: Option<&String>,
+) -> Option<String> {
     if let Some(pkg) = configured_package {
         return Some(pkg.clone());
     }
-    if let Some((_, _, path)) = find_covopt_test_metadata(test_name) {
-        if let Some(pkg) = find_package_for_file(&path) {
+    if let Some((_, _, path)) = find_covopt_test_metadata(test_name)
+        && let Some(pkg) = find_package_for_file(&path) {
             return Some(pkg);
         }
-    }
     None
 }
-
 
 pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
     use walkdir::WalkDir;
     let mut results = Vec::new();
-    for entry in WalkDir::new("src").into_iter().chain(WalkDir::new("tests").into_iter()).filter_map(|e| e.ok()) {
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs") {
-            if let Ok(file_content) = std::fs::read_to_string(entry.path()) {
-                if file_content.contains("#[covopt::test") {
-                    if let Ok(ast) = syn::parse_file(&file_content) {
+    for entry in WalkDir::new("src")
+        .into_iter()
+        .chain(WalkDir::new("tests"))
+        .filter_map(|e| e.ok())
+    {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+            && let Ok(file_content) = std::fs::read_to_string(entry.path())
+                && file_content.contains("#[covopt::test")
+                    && let Ok(ast) = syn::parse_file(&file_content) {
                         for item in ast.items {
                             if let syn::Item::Fn(item_fn) = item {
                                 let has_attr = item_fn.attrs.iter().any(|attr| {
-                                    attr.path().segments.last().map(|s| s.ident.to_string()) == Some("test".to_string())
+                                    attr.path().segments.last().map(|s| s.ident.to_string())
+                                        == Some("test".to_string())
                                 });
                                 if has_attr {
                                     let mut expected = "O(1)".to_string();
@@ -953,36 +949,41 @@ pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
                                     for attr in item_fn.attrs {
                                         if let syn::Meta::List(meta) = &attr.meta {
                                             let tokens = quote::quote!(#meta).to_string();
-                                            if tokens.contains("expected") {
-                                                if let Some(pos) = tokens.find("expected") {
+                                            if tokens.contains("expected")
+                                                && let Some(pos) = tokens.find("expected") {
                                                     let rest = &tokens[pos..];
-                                                    if let Some(start) = rest.find('"') {
-                                                        if let Some(end) = rest[start+1..].find('"') {
-                                                            expected = rest[start+1..start+1+end].to_string();
+                                                    if let Some(start) = rest.find('"')
+                                                        && let Some(end) =
+                                                            rest[start + 1..].find('"')
+                                                        {
+                                                            expected = rest
+                                                                [start + 1..start + 1 + end]
+                                                                .to_string();
                                                         }
-                                                    }
                                                 }
-                                            }
-                                            if tokens.contains("n_values") {
-                                                if let Some(pos) = tokens.find("n_values") {
+                                            if tokens.contains("n_values")
+                                                && let Some(pos) = tokens.find("n_values") {
                                                     let rest = &tokens[pos..];
-                                                    if let Some(start) = rest.find('"') {
-                                                        if let Some(end) = rest[start+1..].find('"') {
-                                                            n_values = rest[start+1..start+1+end].to_string();
+                                                    if let Some(start) = rest.find('"')
+                                                        && let Some(end) =
+                                                            rest[start + 1..].find('"')
+                                                        {
+                                                            n_values = rest
+                                                                [start + 1..start + 1 + end]
+                                                                .to_string();
                                                         }
-                                                    }
                                                 }
-                                            }
                                         }
                                     }
-                                    results.push((item_fn.sig.ident.to_string(), expected, n_values));
+                                    results.push((
+                                        item_fn.sig.ident.to_string(),
+                                        expected,
+                                        n_values,
+                                    ));
                                 }
                             }
                         }
                     }
-                }
-            }
-        }
     }
     results
 }

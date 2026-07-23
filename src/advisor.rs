@@ -1,9 +1,9 @@
 use crate::mca::McaReport;
 use crate::static_analysis::{analyze_complexity, analyze_parameters};
+use covopt_macro::covopt_param;
 use std::collections::HashSet;
 use syn::visit::Visit;
-use syn::{ItemFn, ExprMethodCall, ExprCall, ExprMacro, ExprForLoop, ExprWhile};
-
+use syn::{ExprCall, ExprForLoop, ExprMethodCall, ExprWhile, ItemFn};
 
 pub struct EncapsulationAdvisor;
 
@@ -12,29 +12,29 @@ pub struct AdviseReport {
 }
 
 impl EncapsulationAdvisor {
-        pub fn analyze(item_fn: &ItemFn, mca_report: Option<&McaReport>) -> AdviseReport {
+    pub fn analyze(item_fn: &ItemFn, mca_report: Option<&McaReport>) -> AdviseReport {
         let mut warnings = Vec::new();
 
         // 1. Check Missing Encapsulation (God Function)
         let complexity = analyze_complexity(item_fn);
         let params = analyze_parameters(item_fn);
 
-        if complexity > 10 {
+        if complexity > covopt_param!("M_22_24", 10) {
             warnings.push(format!(
                 "[Rule 5: God Function] Cyclomatic complexity is {}. Splitting cold paths (e.g., error handling) and marking them #[inline(never)] prevents I-Cache trashing.",
                 complexity
             ));
         }
 
-        if params > 5 {
+        if params > covopt_param!("M_29_20", 5) {
             warnings.push(format!(
                 "[Rule 1: Cache Dynamics] Function takes {} parameters. Consider grouping into an aligned context struct to avoid register spilling and stack thrashing.",
                 params
             ));
         }
-        
+
         let generic_count = item_fn.sig.generics.params.len();
-        if generic_count > 3 {
+        if generic_count > covopt_param!("M_37_27", 3) {
             warnings.push(format!(
                 "[Rule 5: Generic Bloat] Function uses {} generic parameters. This causes massive monomorphization, skyrocketing binary size and destroying I-Cache. Consider Box<dyn Trait> for cold paths.",
                 generic_count
@@ -92,7 +92,7 @@ impl EncapsulationAdvisor {
 
         // 3. Branch Prediction (Combining MCA data)
         if let Some(mca) = mca_report {
-            if mca.ipc < 1.5 && complexity > 5 {
+            if mca.ipc < covopt_param!("M_95_25", 1.5) && complexity > covopt_param!("M_95_45", 5) {
                 warnings.push(format!(
                     "[Rule 3: Branch Prediction Thrashing] High complexity ({}) combined with low IPC ({:.2}) strongly suggests the Branch Predictor is failing (e.g., iterating over random data). Consider executing data.sort_unstable() before the hot loop or using branchless bitwise arithmetic.",
                     complexity, mca.ipc
@@ -109,33 +109,32 @@ impl EncapsulationAdvisor {
         AdviseReport { warnings }
     }
 
-
     pub fn analyze_struct(item_struct: &syn::ItemStruct) -> AdviseReport {
         let mut warnings = Vec::new();
         let mut has_atomic = false;
         let mut has_align = false;
-        
+
         for attr in &item_struct.attrs {
             let attr_str = quote::quote!(#attr).to_string().replace(" ", "");
             if attr_str.contains("repr(align(64))") {
                 has_align = true;
             }
         }
-        
+
         for field in &item_struct.fields {
             let ty_str = quote::quote!(#field).to_string();
             if ty_str.contains("Atomic") {
                 has_atomic = true;
             }
         }
-        
+
         if has_atomic && !has_align {
             warnings.push(format!(
                 "[Rule 4: Cache Dynamics, False Sharing & Padding] Struct '{}' contains Atomic variables but is missing #[repr(align(64))]. This causes False Sharing and MESI cache line bouncing under concurrent load.",
                 item_struct.ident
             ));
         }
-        
+
         AdviseReport { warnings }
     }
     fn is_pure_pass_through(item_fn: &ItemFn) -> bool {
@@ -159,7 +158,7 @@ impl EncapsulationAdvisor {
         for i in 0..opcodes_list.len() {
             for j in (i + 1)..opcodes_list.len() {
                 let sim = Self::calculate_similarity(&opcodes_list[i], &opcodes_list[j]);
-                if sim > 0.9 {
+                if sim > covopt_param!("M_162_25", 0.9) {
                     warnings.push(format!(
                         "Semantic Clone Detected: Function '{}' and '{}' share {:.1}% identical machine-level opcodes. Consider deduplication.",
                         asm_blocks[i].0, asm_blocks[j].0, sim * 100.0
@@ -215,13 +214,12 @@ impl EncapsulationAdvisor {
     }
 }
 
-
 #[derive(Default)]
 struct SeniorEngineerVisitor {
     in_loop: bool,
     in_async: bool,
     loop_depth: usize,
-    
+
     // Counters & Flags
     allocations_in_hot_path: usize,
     blocking_calls_in_async: usize,
@@ -257,21 +255,35 @@ impl<'ast> Visit<'ast> for SeniorEngineerVisitor {
         if self.in_loop && (method_name == "clone" || method_name == "to_string") {
             self.allocations_in_hot_path += 1;
         }
-        if self.in_loop && (method_name == "lock" || method_name == "read" || method_name == "write") {
+        if self.in_loop
+            && (method_name == "lock" || method_name == "read" || method_name == "write")
+        {
             self.mutex_in_hot_path += 1;
         }
-        if self.in_loop && (method_name == "compare_exchange" || method_name == "compare_exchange_weak") {
+        if self.in_loop
+            && (method_name == "compare_exchange" || method_name == "compare_exchange_weak")
+        {
             self.manual_cas_loops += 1;
         }
         syn::visit::visit_expr_method_call(self, i);
     }
 
     fn visit_macro(&mut self, i: &'ast syn::Macro) {
-        let macro_name = i.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+        let macro_name = i
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default();
         if self.in_loop && (macro_name == "format" || macro_name == "vec") {
             self.allocations_in_hot_path += 1;
         }
-        if self.in_loop && (macro_name == "println" || macro_name == "print" || macro_name == "eprintln" || macro_name == "eprint") {
+        if self.in_loop
+            && (macro_name == "println"
+                || macro_name == "print"
+                || macro_name == "eprintln"
+                || macro_name == "eprint")
+        {
             self.io_in_hot_path += 1;
         }
         syn::visit::visit_macro(self, i);
@@ -289,9 +301,14 @@ impl<'ast> Visit<'ast> for SeniorEngineerVisitor {
 
     fn visit_expr_call(&mut self, i: &'ast ExprCall) {
         if let syn::Expr::Path(p) = &*i.func {
-            let func_name = p.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+            let func_name = p
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default();
             let full_path = quote::quote!(#p).to_string().replace(" ", "");
-            
+
             if self.in_async {
                 if full_path.contains("thread::sleep") || full_path.contains("fs::") {
                     self.blocking_calls_in_async += 1;

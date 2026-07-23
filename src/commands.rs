@@ -4,6 +4,7 @@ use crate::entropy;
 use crate::mca::McaRunner;
 use crate::runner::CargoTestRunner;
 use crate::*;
+use covopt_macro::covopt_param;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -45,7 +46,11 @@ macro_rules! wlog {
     }};
 }
 
-pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option<&[PathBuf]>) -> bool {
+pub fn run_analysis(
+    args: &RunArgs,
+    compact: bool,
+    workspace_executables: Option<&[PathBuf]>,
+) -> bool {
     let mut log = LogBuffer::new(compact);
 
     let test_name = match args.test.as_ref() {
@@ -60,12 +65,11 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
     };
     let mut ast_expected = None;
     let mut ast_n_values = None;
-    if args.expected.is_none() || args.n_values.is_none() {
-        if let Some((e, n, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
+    if (args.expected.is_none() || args.n_values.is_none())
+        && let Some((e, n, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
             ast_expected = Some(e);
             ast_n_values = Some(n);
         }
-    }
 
     let expected_str = match args.expected.as_ref().or(ast_expected.as_ref()) {
         Some(e) => e,
@@ -138,7 +142,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
     for n_str in n_values_str.split(',') {
         let n: u64 = n_str.trim().parse().unwrap_or(0);
         let runner_clone = std::sync::Arc::clone(&runner);
-        
+
         handles.push(std::thread::spawn(move || {
             let result = runner_clone.run(n as usize, None);
             (n, result)
@@ -155,7 +159,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
             }
         }
     }
-    
+
     // Sort results to process them sequentially
     results.sort_by_key(|(n, _)| *n);
 
@@ -320,8 +324,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
         let max_h = data.iter().map(|&(_, h)| h).max().unwrap_or(1) as f64;
         let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1) as f64;
         for &(n, h) in &data {
-            let n_bar_len = ((n as f64 / max_n) * 40.0) as usize;
-            let h_bar_len = ((h as f64 / max_h) * 40.0) as usize;
+            let n_bar_len = ((n as f64 / max_n) * covopt_param!("M_323_50", 40.0)) as usize;
+            let h_bar_len = ((h as f64 / max_h) * covopt_param!("M_324_50", 40.0)) as usize;
             let n_bar = "=".repeat(n_bar_len);
             let h_bar = "*".repeat(h_bar_len);
             wlog!(log, "N: {:<6} | {}", n, n_bar);
@@ -442,7 +446,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
     wlog!(log, "---------------------------------------------------");
     if let Some(symbol) = target_symbol {
         if let Some((executed, total)) = target_coverage_rate {
-            let rate = (executed as f64 / total as f64) * 100.0;
+            let rate = (executed as f64 / total as f64) * covopt_param!("M_445_58", 100.0);
             coverage_rate_val = Some(rate);
             wlog!(
                 log,
@@ -451,7 +455,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
                 executed,
                 total
             );
-            if rate < 90.0 {
+            if rate < covopt_param!("M_454_22", 90.0) {
                 wlog!(
                     log,
                     "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test."
@@ -559,12 +563,17 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
                             log,
                             "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine..."
                         );
-                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(20);
+                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(
+                            covopt_param!("M_562_87", 20),
+                        );
                         let base_asm_lines: Vec<String> =
                             asm_block.lines().map(|s| s.to_string()).collect();
 
-                        let optimized_asm =
-                            optimizer.optimize_asm(base_asm_lines, 20, args.mca_cpu.clone());
+                        let optimized_asm = optimizer.optimize_asm(
+                            base_asm_lines,
+                            covopt_param!("M_567_67", 20),
+                            args.mca_cpu.clone(),
+                        );
                         let optimized_text = optimized_asm.join("\n");
 
                         wlog!(log, "\n[Optimizer Output] Best ASM schedule found:");
@@ -599,9 +608,12 @@ pub fn run_analysis(args: &RunArgs, compact: bool, workspace_executables: Option
     // --- Energy / Thermal Guidance (High Frequency Polling Detection) ---
     let max_hit_count = data.iter().map(|&(_, h)| h).max().unwrap_or(0);
     let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1);
-    let threshold = args.polling_threshold.unwrap_or(50_000);
+    let threshold = args
+        .polling_threshold
+        .unwrap_or(covopt_param!("M_602_53", 50000));
 
-    if max_hit_count > threshold && max_hit_count > (max_n as u64) * 100 {
+    if max_hit_count > threshold && max_hit_count > (max_n as u64) * covopt_param!("M_604_69", 100)
+    {
         wlog!(
             log,
             "\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <"
@@ -732,7 +744,7 @@ fi
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&hook_path).unwrap().permissions();
-        perms.set_mode(0o755);
+        perms.set_mode(covopt_param!("M_735_23", 493));
         fs::set_permissions(&hook_path, perms).unwrap();
     }
     println!(
@@ -815,7 +827,7 @@ pub fn init_config(args: crate::InitArgs) {
 
         let mut default_config = String::new();
         let found_tests = crate::static_analysis::find_all_covopt_tests();
-        
+
         if found_tests.is_empty() {
             println!("CovOpt-Analyzer: No #[covopt::test] found. Creating default template.");
             default_config.push_str(&format!(
@@ -832,7 +844,10 @@ require_stress_test = true
                 require_aerospace
             ));
         } else {
-            println!("CovOpt-Analyzer: Auto-discovered {} test(s). Generating config.", found_tests.len());
+            println!(
+                "CovOpt-Analyzer: Auto-discovered {} test(s). Generating config.",
+                found_tests.len()
+            );
             for (test_name, exp, n_vals) in found_tests {
                 default_config.push_str(&format!(
                     r#"[[target]]
@@ -986,31 +1001,36 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
 
     let global_output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
     println!("CovOpt-Analyzer: Resolving packages for Batch Compilation Mode...");
-    
+
     let mut packages_to_compile = Vec::new();
     for target in &config.target {
-        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&target.test, target.package.as_ref()) {
-            if !packages_to_compile.contains(&pkg) {
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+            &target.test,
+            target.package.as_ref(),
+        )
+            && !packages_to_compile.contains(&pkg) {
                 println!("Resolved test '{}' to package '{}'", target.test, pkg);
                 packages_to_compile.push(pkg);
             }
-        }
     }
 
     if packages_to_compile.is_empty() {
         println!("CovOpt-Analyzer: Compiling ENTIRE workspace tests (no packages resolved)...");
     } else {
-        println!("CovOpt-Analyzer: Compiling specific packages: {:?}", packages_to_compile);
+        println!(
+            "CovOpt-Analyzer: Compiling specific packages: {:?}",
+            packages_to_compile
+        );
     }
 
-    let workspace_executables = match crate::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
-        Ok(exes) => exes,
-        Err(e) => {
-            eprintln!("Failed to compile workspace tests: {}", e);
-            std::process::exit(1);
-        }
-    };
-
+    let workspace_executables =
+        match crate::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
+            Ok(exes) => exes,
+            Err(e) => {
+                eprintln!("Failed to compile workspace tests: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     let mut json_results = serde_json::json!({
         "status": "success",
@@ -1019,19 +1039,21 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
     let mut all_success = true;
 
     for mut target in config.target {
-        if let Some(tt) = &target_test {
-            if &target.test != tt {
+        if let Some(tt) = &target_test
+            && &target.test != tt {
                 continue;
             }
-        }
-        if fast {
-            if let Some(n_vals) = &target.n_values {
+        if fast
+            && let Some(n_vals) = &target.n_values {
                 let parts: Vec<&str> = n_vals.split(',').collect();
                 if parts.len() > 2 {
-                    target.n_values = Some(format!("{},{}", parts.first().unwrap(), parts.last().unwrap()));
+                    target.n_values = Some(format!(
+                        "{},{}",
+                        parts.first().unwrap(),
+                        parts.last().unwrap()
+                    ));
                 }
             }
-        }
         let args = RunArgs {
             test: Some(target.test.clone()),
             expected: target.expected.clone(),
@@ -1076,7 +1098,7 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
             entropy_result.total_score
         );
 
-        if entropy_result.total_score > 50.0 {
+        if entropy_result.total_score > covopt_param!("M_1079_40", 50.0) {
             eprintln!(
                 "  [!] WARNING: High Entropy Detected! Codebase is unstable, tangled, or noisy."
             );
@@ -1086,8 +1108,11 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
         }
         println!("===================================");
 
-        if is_json {
-            if let Some(arr) = json_results.get_mut("targets").and_then(|t| t.as_array_mut()) {
+        if is_json
+            && let Some(arr) = json_results
+                .get_mut("targets")
+                .and_then(|t| t.as_array_mut())
+            {
                 arr.push(serde_json::json!({
                     "test": target.test,
                     "entropy": {
@@ -1099,9 +1124,7 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
                     "passed": entropy_result.total_score <= 50.0
                 }));
             }
-        }
     }
-
 
     if is_json {
         if !all_success {
@@ -1142,8 +1165,12 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    
-                    if file_name.starts_with('.') || file_name == "target" || file_name == "tests" || file_name == "benches" {
+
+                    if file_name.starts_with('.')
+                        || file_name == "target"
+                        || file_name == "tests"
+                        || file_name == "benches"
+                    {
                         continue;
                     }
 
@@ -1220,17 +1247,20 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                             break;
                         }
                     } else if let syn::Meta::List(list) = &attr.meta {
-                         let path_str = list.path.segments.iter()
-                                .map(|s| s.ident.to_string())
-                                .collect::<Vec<_>>()
-                                .join("::");
-                         if path_str.contains("test") || path_str.contains("bench") {
-                             is_test_or_bench = true;
-                             break;
-                         }
+                        let path_str = list
+                            .path
+                            .segments
+                            .iter()
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        if path_str.contains("test") || path_str.contains("bench") {
+                            is_test_or_bench = true;
+                            break;
+                        }
                     }
                 }
-                
+
                 if is_test_or_bench {
                     continue;
                 }
@@ -1281,35 +1311,38 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
             } else if let syn::Item::Struct(item_struct) = item {
                 let report = EncapsulationAdvisor::analyze_struct(&item_struct);
                 if !report.warnings.is_empty() {
-                    println!("\n[File: {} | Struct: {}]", file_path.display(), item_struct.ident);
+                    println!(
+                        "\n[File: {} | Struct: {}]",
+                        file_path.display(),
+                        item_struct.ident
+                    );
                     for warning in report.warnings {
                         println!("  - {}", warning);
                     }
                 }
+            }
         }
-    }
 
-    // Phase 3: Semantic Clone Detection
-    if !collected_asm_blocks.is_empty() {
-        println!(
-            "\n  [Phase 3] Scanning for Semantic Assembly Clones across {} functions...",
-            collected_asm_blocks.len()
-        );
-        let asm_refs: Vec<(&str, &str)> = collected_asm_blocks
-            .iter()
-            .map(|(n, a)| (n.as_str(), a.as_str()))
-            .collect();
+        // Phase 3: Semantic Clone Detection
+        if !collected_asm_blocks.is_empty() {
+            println!(
+                "\n  [Phase 3] Scanning for Semantic Assembly Clones across {} functions...",
+                collected_asm_blocks.len()
+            );
+            let asm_refs: Vec<(&str, &str)> = collected_asm_blocks
+                .iter()
+                .map(|(n, a)| (n.as_str(), a.as_str()))
+                .collect();
 
-        let clone_warnings = EncapsulationAdvisor::detect_asm_clones(&asm_refs);
-        if clone_warnings.is_empty() {
-            println!("  - No semantic clones detected.");
-        } else {
-            for w in clone_warnings {
-                println!("  - [WARNING] {}", w);
+            let clone_warnings = EncapsulationAdvisor::detect_asm_clones(&asm_refs);
+            if clone_warnings.is_empty() {
+                println!("  - No semantic clones detected.");
+            } else {
+                for w in clone_warnings {
+                    println!("  - [WARNING] {}", w);
+                }
             }
         }
     }
-
-    }
-Ok(())
+    Ok(())
 }

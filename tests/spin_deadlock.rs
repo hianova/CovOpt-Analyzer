@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,7 +22,7 @@ impl SpinMutex {
             .is_err()
         {
             spins += 1;
-            if spins > 10_000 {
+            if spins > covopt_param!("M_24_23", 10000) {
                 // Spin limit exceeded, fallback or log
                 std::hint::spin_loop();
             } else {
@@ -51,7 +52,7 @@ mod tests {
         let n: usize = std::env::var("COVOPT_N")
             .unwrap_or_else(|_| "100".to_string())
             .parse()
-            .unwrap_or(100);
+            .unwrap_or(covopt_param!("M_54_23", 100));
 
         let mutex = Arc::new(SpinMutex::new(0));
         let mut handles = vec![];
@@ -59,7 +60,7 @@ mod tests {
         for _ in std::hint::black_box(0..n) {
             let m = mutex.clone();
             handles.push(std::thread::spawn(move || {
-                for _ in std::hint::black_box(0..1_000) {
+                for _ in std::hint::black_box(0..covopt_param!("M_62_49", 1000)) {
                     let _guard = m.lock();
                     black_box(1);
                 }

@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use crate::RunArgs;
 use crate::analysis::run_analysis;
 use crate::config::CovOptConfig;
@@ -66,7 +67,7 @@ pub fn run_audit() {
             "  TOTAL ENTROPY SCORE:  {:.1}/100.0",
             entropy_result.total_score
         );
-        if entropy_result.total_score > 50.0 {
+        if entropy_result.total_score > covopt_param!("M_69_40", 50.0) {
             eprintln!(
                 "  [!] WARNING: High Entropy Detected! Codebase is unstable, tangled, or noisy."
             );

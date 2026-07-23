@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use crate::RunArgs;
 use crate::analyzer::Complexity;
 use crate::analyzer::ConvergenceAnalyzer;
@@ -269,7 +270,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     wlog!(log, "---------------------------------------------------");
     if let Some(symbol) = target_symbol {
         if let Some((executed, total)) = target_coverage_rate {
-            let rate = (executed as f64 / total as f64) * 100.0;
+            let rate = (executed as f64 / total as f64) * covopt_param!("M_272_58", 100.0);
             coverage_rate_val = Some(rate);
             wlog!(
                 log,
@@ -278,7 +279,7 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                 executed,
                 total
             );
-            if rate < 90.0 {
+            if rate < covopt_param!("M_281_22", 90.0) {
                 wlog!(
                     log,
                     "[WARNING] Function coverage is below 90%. The measured mathematical complexity might not reflect the worst-case scenario. Consider adding more branches to your test."
@@ -379,11 +380,11 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                             log,
                             "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine..."
                         );
-                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(20);
+                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(covopt_param!("M_382_87", 20));
                         let base_asm_lines: Vec<String> =
                             asm_block.lines().map(|s| s.to_string()).collect();
                         let optimized_asm =
-                            optimizer.optimize_asm(base_asm_lines, 20, args.mca_cpu.clone());
+                            optimizer.optimize_asm(base_asm_lines, covopt_param!("M_386_67", 20), args.mca_cpu.clone());
                         let optimized_text = optimized_asm.join("\n");
                         wlog!(log, "\n[Optimizer Output] Best ASM schedule found:");
                         wlog!(log, "{}", optimized_text);
@@ -414,8 +415,8 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
     }
     let max_hit_count = data.iter().map(|&(_, h)| h).max().unwrap_or(0);
     let max_n = data.iter().map(|&(n, _)| n).max().unwrap_or(1);
-    let threshold = args.polling_threshold.unwrap_or(50_000);
-    if max_hit_count > threshold && max_hit_count > (max_n as u64) * 100 {
+    let threshold = args.polling_threshold.unwrap_or(covopt_param!("M_417_53", 50000));
+    if max_hit_count > threshold && max_hit_count > (max_n as u64) * covopt_param!("M_418_69", 100) {
         wlog!(
             log,
             "\n> [!CAUTION] COVOPT GUIDANCE: THERMAL & ENERGY WARNING <"

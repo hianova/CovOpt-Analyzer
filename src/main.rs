@@ -200,6 +200,10 @@ pub struct InitArgs {
 pub struct ScanMagicArgs {
     /// Optional path to scan (defaults to current directory)
     pub path: Option<String>,
+
+    /// Automatically fix magic numbers by wrapping them in covopt_param!
+    #[arg(long, default_value_t = false)]
+    pub auto_fix: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -378,7 +382,7 @@ fn main() {
         }
         Some(Commands::Check(cmd)) => match cmd {
             CheckCommands::Audit(args) => commands::run_audit(args.test, args.fast, args.json),
-            CheckCommands::Magic(args) => crate::scanner::run_scan(args.path),
+            CheckCommands::Magic(args) => crate::scanner::run_scan(args.path, args.auto_fix),
             CheckCommands::Advise(args) => {
                 if let Err(e) = commands::run_advise(&args) {
                     eprintln!("CovOpt Error: {:?}", e);

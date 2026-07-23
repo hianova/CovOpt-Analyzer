@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::path::Path;
 use std::process::Command;
 
@@ -103,9 +104,9 @@ fn find_target_file(asan_log: &str) -> Option<(String, usize)> {
                     break;
                 }
             }
-            let path_str = line[start_idx..pos + 3].trim();
+            let path_str = line[start_idx..pos + covopt_param!("M_106_49", 3)].trim();
 
-            let remaining = &line[pos + 4..];
+            let remaining = &line[pos + covopt_param!("M_108_40", 4)..];
             let mut end_idx = 0;
             for (i, c) in remaining.char_indices() {
                 if c.is_ascii_digit() {
@@ -225,13 +226,13 @@ fn call_llm(prompt: &str) -> Option<String> {
 
 fn extract_code(llm_output: &str) -> Option<String> {
     if let Some(start) = llm_output.find("```rust") {
-        let after_start = &llm_output[start + 7..];
+        let after_start = &llm_output[start + covopt_param!("M_228_46", 7)..];
         if let Some(end) = after_start.find("```") {
             return Some(after_start[..end].to_string());
         }
     }
     if let Some(start) = llm_output.find("```") {
-        let after_start = &llm_output[start + 3..];
+        let after_start = &llm_output[start + covopt_param!("M_234_46", 3)..];
         let mut code_start = 0;
         if let Some(nl) = after_start.find('\n') {
             let tag = after_start[..nl].trim();
@@ -248,7 +249,11 @@ fn extract_code(llm_output: &str) -> Option<String> {
 }
 
 pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
-    let max_fix_attempts = if auto_fix { 3 } else { 1 };
+    let max_fix_attempts = if auto_fix {
+        covopt_param!("M_251_41", 3)
+    } else {
+        1
+    };
     let mut attempt = 0;
 
     while attempt < max_fix_attempts {

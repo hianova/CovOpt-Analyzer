@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -64,7 +65,7 @@ impl McaRunner {
                 }
             } else if line.starts_with("Total Cycles:") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() == 3 {
+                if parts.len() == covopt_param!("M_67_34", 3) {
                     report.total_cycles = parts[2].parse().unwrap_or(0);
                 }
             } else if line.starts_with("IPC:") {
@@ -74,7 +75,7 @@ impl McaRunner {
                 }
             } else if line.starts_with("Block RThroughput:") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() == 3 {
+                if parts.len() == covopt_param!("M_77_34", 3) {
                     report.block_rthroughput = parts[2].parse().unwrap_or(0.0);
                 }
             }

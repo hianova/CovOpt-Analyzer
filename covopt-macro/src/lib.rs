@@ -51,13 +51,13 @@ pub fn covopt_param(input: TokenStream) -> TokenStream {
 ///
 /// # Example
 /// ```rust
-/// #[covopt_macro::test(expected = "O(N)")]
+/// #[covopt_test]
 /// fn test_my_algorithm(n: usize) {
 ///     // algorithm body...
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn covopt_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
 
     let fn_name = &input_fn.sig.ident;
@@ -65,7 +65,7 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Check if the function has exactly one parameter (e.g. `n: usize`)
     if input_fn.sig.inputs.len() != 1 {
-        panic!("#[covopt::test] requires a function with exactly 1 parameter (e.g. `n: usize`)");
+        panic!("#[covopt_test] requires a function with exactly 1 parameter (e.g. `n: usize`)");
     }
 
     // Wrap the original body in a closure

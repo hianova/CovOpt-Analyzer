@@ -1,5 +1,6 @@
 use crate::config::TargetConfig;
 use crate::runner::CargoTestRunner;
+use covopt_macro::covopt_param;
 use std::fmt::Write;
 use std::process::Command;
 
@@ -19,7 +20,7 @@ pub fn calculate_entropy_score(config: &TargetConfig, compact: bool) -> EntropyR
 
     let total = fuzz_variance + branch_sprawl + cli_noise;
 
-    if !compact || total > 50.0 {
+    if !compact || total > covopt_param!("M_22_27", 50.0) {
         print!("{}", details);
     }
 
@@ -49,13 +50,14 @@ fn compute_cli_noise(details: &mut String) -> f64 {
             if level == "warning" {
                 warning_count += 1;
             } else if level == "error" || level == "error: internal compiler error" {
-                warning_count += 5; // Heavily penalize errors/ICE
+                warning_count += covopt_param!("M_52_33", 5); // Heavily penalize errors/ICE
             }
         }
     }
 
     // Each warning adds 2 points to entropy, up to 30.
-    let score = (warning_count as f64 * 2.0).min(30.0);
+    let score =
+        (warning_count as f64 * covopt_param!("M_58_40", 2.0)).min(covopt_param!("M_58_49", 30.0));
     let _ = writeln!(
         details,
         "     Found {} warnings. CLI Noise Score: {:.1}/30.0",
@@ -66,15 +68,20 @@ fn compute_cli_noise(details: &mut String) -> f64 {
 
 fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let _ = writeln!(details, "  -> Calculating Fuzz-Cov Variance (A)...");
-    let iterations = config.fuzz_iterations.unwrap_or(10);
-    let n_value = 100; // Use a fixed N for fuzzing loops
+    let iterations = config
+        .fuzz_iterations
+        .unwrap_or(covopt_param!("M_69_54", 10));
+    let n_value = covopt_param!("M_70_18", 100); // Use a fixed N for fuzzing loops
 
     let output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
     let mut packages_to_compile = Vec::new();
-    if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref()) {
+    if let Some(pkg) =
+        crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref())
+    {
         packages_to_compile.push(pkg);
     }
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile).unwrap_or_default();
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile)
+        .unwrap_or_default();
     let runner = crate::runner::CargoTestRunner::new(&config.test, &output_dir, executables);
 
     use rayon::prelude::*;
@@ -82,15 +89,20 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let hit_counts: Vec<f64> = (0..iterations)
         .into_par_iter()
         .filter_map(|i| {
-            let seed = i as u64 * 1337 + 1000;
+            let seed = i as u64 * covopt_param!("M_85_34", 1337) + covopt_param!("M_85_41", 1000);
             let iter_dir = tempfile::tempdir()
                 .expect("Failed to create tempdir")
                 .path()
                 .to_path_buf();
-            let local_runner = crate::runner::CargoTestRunner::new(&config.test, &iter_dir, runner.executables.clone());
+            let local_runner = crate::runner::CargoTestRunner::new(
+                &config.test,
+                &iter_dir,
+                runner.executables.clone(),
+            );
 
             if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
-                && let Some((_, _, _, hits)) = map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]))
+                && let Some((_, _, _, hits)) =
+                    map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]))
             {
                 Some(hits as f64)
             } else {
@@ -102,9 +114,9 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     if hit_counts.is_empty() {
         let _ = writeln!(
             details,
-            "     Could not gather Fuzz-Cov data. Defaulting to 15.0"
+            "     \x1b[31m[WARN] Failed to gather Fuzz-Cov data. (Did your test panic or lack loops?) Defaulting to 15.0 penalty.\x1b[0m"
         );
-        return 15.0;
+        return covopt_param!("M_107_15", 15.0);
     }
 
     let mean = hit_counts.iter().sum::<f64>() / hit_counts.len() as f64;
@@ -121,7 +133,7 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     let cv = if mean > 0.0 { std_dev / mean } else { 0.0 }; // Coefficient of variation
 
     // CV > 0.5 means highly unstable -> score 30
-    let score = (cv * 60.0).min(30.0);
+    let score = (cv * covopt_param!("M_124_22", 60.0)).min(covopt_param!("M_124_32", 30.0));
     let _ = writeln!(
         details,
         "     Fuzz Variance (StdDev: {:.1}, Mean: {:.1}, CV: {:.2}). Score: {:.1}/30.0",
@@ -160,16 +172,21 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
         .to_path_buf();
 
     let mut packages_to_compile = Vec::new();
-    if let Some(pkg) = crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref()) {
+    if let Some(pkg) =
+        crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref())
+    {
         packages_to_compile.push(pkg);
     }
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile).unwrap_or_default();
+    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile)
+        .unwrap_or_default();
 
     for tc in &test_cases {
         let runner = CargoTestRunner::new(tc, &output_dir, executables.clone());
-        if let Ok((map, _)) = runner.run(100, None) {
+        if let Ok((map, _)) = runner.run(covopt_param!("M_170_41", 100), None) {
             let mut lines = std::collections::HashSet::new();
-            if let Some((target_file, _, _, _)) = map.find_peak_location(config.ignore.as_deref().unwrap_or(&[])) {
+            if let Some((target_file, _, _, _)) =
+                map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]))
+            {
                 for (file, file_cov) in &map.hit_counts {
                     if file == &target_file {
                         for (&line_number, &count) in file_cov {
@@ -185,7 +202,7 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     }
 
     if covered_lines_per_test.len() < 2 {
-        return 20.0; // Fail safe
+        return covopt_param!("M_188_15", 20.0); // Fail safe
     }
 
     let mut intersection = covered_lines_per_test[0].clone();
@@ -205,7 +222,7 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
         1.0
     };
     // ratio 1.0 -> score 0. ratio 0.0 -> score 40.
-    let score = (1.0 - ratio) * 40.0;
+    let score = (1.0 - ratio) * covopt_param!("M_208_32", 40.0);
     let _ = writeln!(
         details,
         "     Branch Sprawl (Intersection: {}, Union: {}, Ratio: {:.2}). Score: {:.1}/40.0",

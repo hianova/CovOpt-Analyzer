@@ -1,6 +1,7 @@
 use crate::config::CovOptConfig;
 use crate::harden;
 use crate::{CiArgs, commands};
+use covopt_macro::covopt_param;
 
 pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("===================================================");
@@ -26,7 +27,12 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
         for target_config in &config.target {
             println!("  -> Optimizing target: {}", target_config.test);
             // Defaulting to running explore logic for optimization in CI pipeline
-            crate::explore::run("src", "UnknownTrait", "evaluate_fitness", 0.99);
+            crate::explore::run(
+                "src",
+                "UnknownTrait",
+                "evaluate_fitness",
+                covopt_param!("M_29_75", 0.99),
+            );
         }
         println!("✅ [CI OK] Optimization complete.");
     }

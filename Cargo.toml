@@ -22,6 +22,7 @@ path = "src/main.rs"
 covopt-macro = { path = "covopt-macro" }
 
 [dependencies]
+covopt-macro = { path = "covopt-macro" }
 spin = "0.9"
 clap = { version = "4.5.31", features = ["derive"] }
 tempfile = "3.17.1"

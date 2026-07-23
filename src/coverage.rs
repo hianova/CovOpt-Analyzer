@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -89,7 +90,7 @@ impl CoverageMap {
                         return Some(count);
                     }
                     current_line -= 1;
-                    if line_number - current_line > 20 {
+                    if line_number - current_line > covopt_param!("M_92_52", 20) {
                         break;
                     }
                 }
@@ -110,7 +111,7 @@ impl CoverageMap {
                     }
                     current_line -= 1;
                     // Don't search too far back
-                    if line_number - current_line > 20 {
+                    if line_number - current_line > covopt_param!("M_113_52", 20) {
                         break;
                     }
                 }
@@ -120,15 +121,15 @@ impl CoverageMap {
     }
 
     /// Finds the location (file, line, symbol, hits) with the maximum hit count across all files.
-    pub fn find_peak_location(&self, ignore_patterns: &[String]) -> Option<(String, u64, String, u64)> {
+    pub fn find_peak_location(
+        &self,
+        ignore_patterns: &[String],
+    ) -> Option<(String, u64, String, u64)> {
         let mut candidates: Vec<(&String, u64, Option<&String>, u64)> = Vec::new();
 
         for (file, file_hits) in &self.hit_counts {
             for (line, &hits) in file_hits {
-                let sym_opt = self
-                    .symbol_map
-                    .get(file)
-                    .and_then(|m| m.get(line));
+                let sym_opt = self.symbol_map.get(file).and_then(|m| m.get(line));
 
                 candidates.push((file, *line, sym_opt, hits));
             }
@@ -140,7 +141,7 @@ impl CoverageMap {
         for (file, line, sym_opt, hits) in candidates {
             let sym_str = sym_opt.unwrap_or(&unknown_sym);
             let demangled = rustc_demangle::demangle(sym_str).to_string();
-            
+
             if demangled.contains("unlikely")
                 || demangled.contains("likely")
                 || demangled.contains("black_box")
@@ -157,16 +158,17 @@ impl CoverageMap {
             // Read the source file to check for AST-level #[covopt::ignore] or #![cfg_attr(covopt, ignore)]
             if let Ok(source) = std::fs::read_to_string(file) {
                 let lines: Vec<&str> = source.lines().collect();
-                let start_idx = line.saturating_sub(20) as usize;
+                let start_idx = line.saturating_sub(covopt_param!("M_160_52", 20)) as usize;
                 let end_idx = (line as usize).min(lines.len());
                 let mut should_ignore = false;
                 for i in start_idx..end_idx {
-                    if let Some(src_line) = lines.get(i) {
-                        if src_line.contains("covopt::ignore") || src_line.contains("cfg_attr(covopt, ignore)") {
+                    if let Some(src_line) = lines.get(i)
+                        && (src_line.contains("covopt::ignore")
+                            || src_line.contains("cfg_attr(covopt, ignore)"))
+                        {
                             should_ignore = true;
                             break;
                         }
-                    }
                 }
                 if should_ignore {
                     continue;

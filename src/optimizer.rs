@@ -1,4 +1,5 @@
 use crate::mca::McaRunner;
+use covopt_macro::covopt_param;
 use std::collections::HashSet;
 
 #[derive(Clone)]
@@ -17,7 +18,7 @@ pub struct DiscreteDiffusionEngine {
 impl Default for DiscreteDiffusionEngine {
     fn default() -> Self {
         Self {
-            diffusion_steps: 10,
+            diffusion_steps: covopt_param!("M_20_29", 10),
         }
     }
 }
@@ -64,7 +65,7 @@ impl DiscreteDiffusionEngine {
                     || part.starts_with('w')
                     || part.starts_with('v')
                     || part.starts_with('q'))
-                    && part.len() <= 3
+                    && part.len() <= covopt_param!("M_67_37", 3)
                     && part[1..].parse::<u32>().is_ok()
                 {
                     if i == 0 && !is_store {
@@ -159,9 +160,11 @@ impl DiscreteDiffusionEngine {
         let base_candidate: Vec<(usize, String)> = base_asm.into_iter().enumerate().collect();
 
         let mut seeds = Vec::with_capacity(num_candidates);
-        let mut base_seed = 12345usize;
+        let mut base_seed: usize = covopt_param!("M_162_28", 12345);
         for _ in 0..num_candidates {
-            base_seed = base_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            base_seed = base_seed
+                .wrapping_mul(covopt_param!("M_164_47", 1664525))
+                .wrapping_add(covopt_param!("M_164_69", 1013904223));
             seeds.push(base_seed);
         }
 
@@ -173,7 +176,7 @@ impl DiscreteDiffusionEngine {
             let noise_level = 1.0 - (step as f64 / self.diffusion_steps as f64);
 
             for (i, candidate) in canvas.iter_mut().enumerate() {
-                let step_seed = seeds[i].wrapping_add(step * 1234567);
+                let step_seed = seeds[i].wrapping_add(step * covopt_param!("M_176_61", 1234567));
                 Self::mutate_asm(candidate, noise_level, step_seed);
             }
 
@@ -191,7 +194,10 @@ impl DiscreteDiffusionEngine {
                         .collect::<Vec<_>>()
                         .join("\n");
                     let score = match mca_runner.run(&asm_text) {
-                        Ok(report) => report.block_rthroughput - (report.ipc * 0.001), // Combine RThroughput and IPC
+                        Ok(report) => {
+                            report.block_rthroughput
+                                - (report.ipc * covopt_param!("M_194_79", 0.001))
+                        } // Combine RThroughput and IPC
                         Err(_) => f64::MAX,
                     };
                     (score, candidate.clone())
@@ -228,10 +234,13 @@ impl DiscreteDiffusionEngine {
     }
 
     fn mutate_asm(candidate: &mut [(usize, String)], noise_level: f64, mut seed: usize) {
-        let num_mutations = (candidate.len() as f64 * noise_level * 0.1).ceil() as usize;
+        let num_mutations =
+            (candidate.len() as f64 * noise_level * covopt_param!("M_231_68", 0.1)).ceil() as usize;
 
         let rand = |s: &mut usize, max: usize| -> usize {
-            *s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            *s = s
+                .wrapping_mul(covopt_param!("M_234_32", 1664525))
+                .wrapping_add(covopt_param!("M_234_54", 1013904223));
             *s % max
         };
 

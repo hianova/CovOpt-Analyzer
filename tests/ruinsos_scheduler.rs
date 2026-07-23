@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 // Mock implementation of a scheduler lock-free insertion or simple push
 // simulating RuinsOS ThreadTask logic to verify O(1) complexity.
 
@@ -22,7 +23,7 @@ fn ruinsos_scheduler() {
     let n: usize = std::env::var("COVOPT_N")
         .unwrap_or_else(|_| "100".to_string())
         .parse()
-        .unwrap_or(100);
+        .unwrap_or(covopt_param!("M_25_19", 100));
 
     let mut queue = VecDeque::new();
 

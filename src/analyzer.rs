@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum Complexity {
     O1,
@@ -21,10 +22,10 @@ impl Complexity {
             Complexity::ON2 => n * n,
             Complexity::O2N => {
                 // To prevent f64 infinity, we might cap N if it's too large, or just use 2.0_f64.powf.
-                if n > 1023.0 {
+                if n > covopt_param!("M_24_23", 1023.0) {
                     f64::MAX
                 } else {
-                    2.0_f64.powf(n)
+                    (covopt_param!("M_27_20", 2.0_f64)).powf(n)
                 }
             }
             Complexity::OSqrtN => n.sqrt(),
@@ -89,7 +90,7 @@ impl ConvergenceAnalyzer {
             sum_xx_diff += x_diff * x_diff;
         }
 
-        let c = if sum_xx_diff.abs() < 1e-9 {
+        let c = if sum_xx_diff.abs() < covopt_param!("M_92_39", 1e-9) {
             0.0
         } else {
             sum_xy_diff / sum_xx_diff
@@ -107,7 +108,7 @@ impl ConvergenceAnalyzer {
             ss_res += (y - predicted_y).powi(2);
         }
 
-        if ss_tot.abs() < 1e-9 {
+        if ss_tot.abs() < covopt_param!("M_110_26", 1e-9) {
             if complexity == Complexity::O1 {
                 return (1.0, c);
             } else {
@@ -137,7 +138,7 @@ impl ConvergenceAnalyzer {
             }
         }
 
-        let is_converged = expected_r2 >= 0.95;
+        let is_converged = expected_r2 >= covopt_param!("M_140_42", 0.95);
 
         AnalysisReport {
             is_converged,
@@ -213,7 +214,7 @@ mod tests {
         let n: usize = std::env::var("COVOPT_N")
             .unwrap_or_else(|_| "100".to_string())
             .parse()
-            .unwrap_or(100);
+            .unwrap_or(covopt_param!("M_216_23", 100));
 
         // Generate N data points
         let mut data = Vec::with_capacity(n);

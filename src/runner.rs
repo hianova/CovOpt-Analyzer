@@ -1,4 +1,5 @@
 use crate::coverage::CoverageMap;
+use covopt_macro::covopt_param;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -129,7 +130,10 @@ impl CoverageRunner {
     }
 }
 
-pub fn compile_workspace_tests(output_dir: &Path, packages: &[String]) -> Result<Vec<PathBuf>, String> {
+pub fn compile_workspace_tests(
+    output_dir: &Path,
+    packages: &[String],
+) -> Result<Vec<PathBuf>, String> {
     if !output_dir.exists() {
         fs::create_dir_all(output_dir)
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -137,19 +141,20 @@ pub fn compile_workspace_tests(output_dir: &Path, packages: &[String]) -> Result
 
     let mut cmd = Command::new("cargo");
     cmd.env("RUSTFLAGS", "-C instrument-coverage")
-       .env(
-           "LLVM_PROFILE_FILE",
-           output_dir.join("default_%m_%p.profraw"),
-       )
-       .arg("test")
-       .arg("--no-run")
-       .arg("--message-format=json");
+        .env(
+            "LLVM_PROFILE_FILE",
+            output_dir.join("default_%m_%p.profraw"),
+        )
+        .arg("test")
+        .arg("--no-run")
+        .arg("--message-format=json");
 
     for pkg in packages {
         cmd.arg("-p").arg(pkg);
     }
 
-    let output = cmd.output()
+    let output = cmd
+        .output()
         .map_err(|e| format!("Failed to run cargo test: {}", e))?;
 
     if !output.status.success() {
@@ -246,11 +251,13 @@ impl CargoTestRunner {
         println!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
         println!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
 
-        let _ = std::fs::write(self.output_dir.join(format!("covopt_debug_{}.json", n)), &lcov_str);
+        let _ = std::fs::write(
+            self.output_dir.join(format!("covopt_debug_{}.json", n)),
+            &lcov_str,
+        );
         let _ = std::fs::write(format!("/tmp/covopt_debug_{}.json", n), &lcov_str);
         Ok((map, peak_rss))
     }
-
 
     fn execute_tests(
         &self,
@@ -481,7 +488,7 @@ impl CargoTestRunner {
             let tline = line.trim();
             if tline.starts_with(".file") {
                 let parts: Vec<&str> = tline.split_whitespace().collect();
-                if parts.len() >= 3 {
+                if parts.len() >= covopt_param!("M_484_34", 3) {
                     let id = parts[1];
                     let path = parts[2].trim_matches('"');
                     if path.contains(target_file) {
@@ -499,7 +506,7 @@ impl CargoTestRunner {
             let tline = line.trim();
             if tline.starts_with(".loc ") {
                 let parts: Vec<&str> = tline.split_whitespace().collect();
-                if parts.len() >= 3 {
+                if parts.len() >= covopt_param!("M_502_34", 3) {
                     let id = parts[1];
                     let l_num = parts[2];
                     if id == file_id && l_num == target_line.to_string() {
@@ -554,7 +561,7 @@ impl CargoTestRunner {
                 if all_match {
                     // Verify it's a function by looking ahead 5 lines for .cfi_startproc or .loc
                     let mut is_function = false;
-                    for j in 1..=5 {
+                    for j in 1..=covopt_param!("M_557_33", 5) {
                         if let Some(&next_line) = lines.get(i + j)
                             && (next_line.contains(".cfi_startproc")
                                 || next_line.contains(".loc")
@@ -625,7 +632,7 @@ fn main() {
         let source_str = canonical_source.to_string_lossy().into_owned();
 
         // The loop is on line 4, and it runs 5 times based on `loop_test(5)`
-        let hit_count = map.get_hit_count(&source_str, 4);
+        let hit_count = map.get_hit_count(&source_str, covopt_param!("M_628_55", 4));
         assert_eq!(hit_count, Some(5), "Loop body should have hit count 5");
     }
 
@@ -713,8 +720,16 @@ fn main() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&fake_cov_path, fs::Permissions::from_mode(0o755)).unwrap();
-            fs::set_permissions(&out_bin_path, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(
+                &fake_cov_path,
+                fs::Permissions::from_mode(covopt_param!("M_716_75", 493)),
+            )
+            .unwrap();
+            fs::set_permissions(
+                &out_bin_path,
+                fs::Permissions::from_mode(covopt_param!("M_717_74", 493)),
+            )
+            .unwrap();
         }
 
         let mut runner =

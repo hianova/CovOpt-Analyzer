@@ -6,7 +6,7 @@ use syn::{ExprLit, Lit};
 
 pub struct MagicNumberScanner {
     pub file_path: String,
-    pub found_magics: Vec<(LineColumn, String)>,
+    pub found_magics: Vec<(LineColumn, LineColumn, String)>,
 }
 
 impl<'ast> Visit<'ast> for MagicNumberScanner {
@@ -17,8 +17,11 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
                 if let Ok(val) = value_str.parse::<i64>() {
                     // Ignore common safe numbers
                     if val != 0 && val != 1 && val != 2 && val != -1 {
-                        self.found_magics
-                            .push((node.lit.span().start(), value_str.to_string()));
+                        self.found_magics.push((
+                            node.lit.span().start(),
+                            node.lit.span().end(),
+                            value_str.to_string(),
+                        ));
                     }
                 }
             }
@@ -29,8 +32,11 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
                     if (val.abs() - 0.0).abs() > f64::EPSILON
                         && (val.abs() - 1.0).abs() > f64::EPSILON
                     {
-                        self.found_magics
-                            .push((node.lit.span().start(), value_str.to_string()));
+                        self.found_magics.push((
+                            node.lit.span().start(),
+                            node.lit.span().end(),
+                            value_str.to_string(),
+                        ));
                     }
                 }
             }
@@ -41,13 +47,14 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
     }
 }
 
-pub fn run_scan(path: Option<String>) {
+pub fn run_scan(path: Option<String>, auto_fix: bool) {
     let start_dir = path.unwrap_or_else(|| ".".to_string());
     let mut files_to_scan = Vec::new();
     collect_rs_files(Path::new(&start_dir), &mut files_to_scan);
 
     println!("Scanning {} for magic numbers...", start_dir);
     let mut total_found = 0;
+    let mut total_fixed = 0;
 
     for file_path in files_to_scan {
         if let Ok(content) = fs::read_to_string(&file_path)
@@ -61,20 +68,74 @@ pub fn run_scan(path: Option<String>) {
 
             if !scanner.found_magics.is_empty() {
                 println!("\n[{}]", scanner.file_path);
-                for (loc, val) in scanner.found_magics {
-                    println!("  Line {}: Found magic number `{}`", loc.line, val);
+
+                // Sort by line, then column, descending, to safely rewrite from end to start of line
+                scanner.found_magics.sort_by(|a, b| b.0.cmp(&a.0));
+
+                let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                let mut file_changed = false;
+
+                for (start_loc, end_loc, val) in scanner.found_magics {
+                    let line_idx = start_loc.line - 1;
+                    if auto_fix && line_idx < lines.len() && start_loc.line == end_loc.line {
+                        let line_str = &mut lines[line_idx];
+                        let start_col = start_loc.column;
+                        let end_col = end_loc.column;
+
+                        let replacement = format!(
+                            "covopt_param!(\"M_{}_{}\", {})",
+                            start_loc.line, start_loc.column, val
+                        );
+
+                        if start_col <= end_col && end_col <= line_str.len() {
+                            line_str.replace_range(start_col..end_col, &replacement);
+                            println!(
+                                "  Line {}: Fixed magic number `{}` -> `{}`",
+                                start_loc.line, val, replacement
+                            );
+                            file_changed = true;
+                            total_fixed += 1;
+                        } else {
+                            println!(
+                                "  Line {}: Found magic number `{}` (auto-fix failed due to offset mismatch)",
+                                start_loc.line, val
+                            );
+                        }
+                    } else {
+                        println!("  Line {}: Found magic number `{}`", start_loc.line, val);
+                    }
                     total_found += 1;
+                }
+
+                if file_changed {
+                    // Add `use covopt_macro::covopt_param;` at the top if not present
+                    if !lines
+                        .iter()
+                        .any(|l| l.contains("use covopt_macro::covopt_param;"))
+                    {
+                        lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                    }
+                    if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
+                        eprintln!("Failed to write {}: {}", file_path.display(), e);
+                    }
                 }
             }
         }
     }
 
     if total_found > 0 {
-        println!(
-            "\n[!] Found {} magic numbers. Consider wrapping them with `covopt_param!(\"name\", value)`.",
-            total_found
-        );
-        std::process::exit(1);
+        if auto_fix {
+            println!(
+                "\n[!] Found {} magic numbers, successfully fixed {}.",
+                total_found, total_fixed
+            );
+        } else {
+            println!(
+                "\n[!] Found {} magic numbers. Consider wrapping them with `covopt_param!(\"name\", value)` or run with `--auto-fix`.",
+                total_found
+            );
+            std::process::exit(1);
+        }
     } else {
         println!("\n[OK] No magic numbers found! The codebase is highly tunable.");
     }

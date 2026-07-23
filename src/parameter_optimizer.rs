@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 use rand::RngExt;
 use std::collections::HashMap;
 use std::process::Command;
@@ -49,7 +50,7 @@ impl ParameterOptimizer {
         let mut best_params = HashMap::new();
         let mut rng = rand::rng();
 
-        let epochs = 5;
+        let epochs = covopt_param!("M_52_21", 5);
         let samples_per_epoch = if self.iterations < epochs {
             1
         } else {
@@ -106,7 +107,7 @@ impl ParameterOptimizer {
             // Logarithmic Bound Shrinking
             for (name, bounds) in current_bounds.iter_mut() {
                 if let Some(&best_val) = epoch_best_params.get(name) {
-                    let half_range = (bounds.max - bounds.min) / 4.0;
+                    let half_range = (bounds.max - bounds.min) / covopt_param!("M_109_65", 4.0);
                     let mut new_min = best_val - half_range;
                     let mut new_max = best_val + half_range;
 
