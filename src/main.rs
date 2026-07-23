@@ -8,6 +8,7 @@ pub mod auto_simd;
 pub mod cache;
 pub mod ci;
 pub mod commands;
+pub mod dataflow;
 pub mod config;
 pub mod coverage;
 pub mod dashboard;
@@ -81,8 +82,17 @@ pub enum CheckCommands {
     /// Scan Rust files for hardcoded magic numbers
     #[command(name = "magic")]
     Magic(ScanMagicArgs),
+    /// Run Data-Flow & Taint Analysis
+    #[command(name = "dataflow")]
+    Dataflow(DataflowArgs),
     /// Analyze encapsulation quality (Abstraction Penalty & Missing Encapsulation)
     Advise(AdviseArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct DataflowArgs {
+    /// Optional path to scan (defaults to current directory)
+    pub path: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -393,6 +403,7 @@ fn main() {
         Some(Commands::Check(cmd)) => match cmd {
             CheckCommands::Audit(args) => commands::run_audit(args.test, args.fast, args.json),
             CheckCommands::Magic(args) => crate::scanner::run_scan(args.path, args.auto_fix, args.restore),
+            CheckCommands::Dataflow(args) => crate::dataflow::run_dataflow(args.path),
             CheckCommands::Advise(args) => {
                 if let Err(e) = commands::run_advise(&args) {
                     eprintln!("CovOpt Error: {:?}", e);

@@ -130,8 +130,10 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
 
                 let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
                 let mut file_changed = false;
+                let mut abort_scan = false;
 
                 for (start_loc, end_loc, val) in scanner.found_magics {
+                    if abort_scan { break; }
                     let line_idx = start_loc.line - 1;
                     if auto_fix && line_idx < lines.len() && start_loc.line == end_loc.line {
                         let line_str = &mut lines[line_idx];
@@ -144,13 +146,37 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         );
 
                         if start_col <= end_col && end_col <= line_str.len() {
-                            line_str.replace_range(start_col..end_col, &replacement);
-                            println!(
-                                "  Line {}: Fixed magic number `{}` -> `{}`",
-                                start_loc.line, val, replacement
-                            );
-                            file_changed = true;
-                            total_fixed += 1;
+                            let old_line = line_str.clone();
+                            let mut new_line = line_str.clone();
+                            new_line.replace_range(start_col..end_col, &replacement);
+                            
+                            println!("  Line {}: Found magic number `{}`", start_loc.line, val);
+                            println!("- {}", old_line.trim_start());
+                            println!("+ {}", new_line.trim_start());
+                            
+                            let mut apply = false;
+                            loop {
+                                use std::io::{self, Write};
+                                print!("Apply this fix? [y]es / [n]o / [q]uit: ");
+                                let _ = io::stdout().flush();
+                                let mut input = String::new();
+                                let _ = io::stdin().read_line(&mut input);
+                                match input.trim().to_lowercase().as_str() {
+                                    "y" | "yes" => { apply = true; break; }
+                                    "n" | "no" => { apply = false; break; }
+                                    "q" | "quit" => { abort_scan = true; break; }
+                                    _ => println!("Invalid input."),
+                                }
+                            }
+                            
+                            if apply {
+                                *line_str = new_line;
+                                file_changed = true;
+                                total_fixed += 1;
+                                println!("    -> Fixed.");
+                            } else {
+                                println!("    -> Skipped.");
+                            }
                         } else {
                             println!(
                                 "  Line {}: Found magic number `{}` (auto-fix failed due to offset mismatch)",
@@ -161,6 +187,10 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         println!("  Line {}: Found magic number `{}`", start_loc.line, val);
                     }
                     total_found += 1;
+                }
+                
+                if abort_scan {
+                    println!("Aborting scan as requested.");
                 }
 
                 if file_changed {
@@ -191,6 +221,10 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         eprintln!("Failed to write {}: {}", file_path.display(), e);
                     }
                 }
+                
+                if abort_scan {
+                    break;
+                }
             }
         }
     }
@@ -213,7 +247,7 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     }
 }
 
-fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
+pub fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if dir.is_dir()
         && let Ok(entries) = fs::read_dir(dir)
     {
