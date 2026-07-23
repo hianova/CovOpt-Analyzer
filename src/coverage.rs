@@ -121,9 +121,11 @@ impl CoverageMap {
     }
 
     /// Finds the location (file, line, symbol, hits) with the maximum hit count across all files.
+    /// If `target_fn_name` is provided, restricts the search to symbols containing that name.
     pub fn find_peak_location(
         &self,
         ignore_patterns: &[String],
+        target_fn_name: Option<&str>,
     ) -> Option<(String, u64, String, u64)> {
         let mut candidates: Vec<(&String, u64, Option<&String>, u64)> = Vec::new();
 
@@ -142,16 +144,18 @@ impl CoverageMap {
             let sym_str = sym_opt.unwrap_or(&unknown_sym);
             let demangled = rustc_demangle::demangle(sym_str).to_string();
 
-            if demangled.contains("unlikely")
-                || demangled.contains("likely")
-                || demangled.contains("black_box")
+            if let Some(target_fn) = target_fn_name
+                && !demangled.contains(target_fn)
             {
                 continue;
             }
-            if ignore_patterns.iter().any(|pat| demangled.contains(pat)) {
-                continue;
-            }
-            if demangled.contains("ignore") {
+
+            if demangled.contains("unlikely")
+                || demangled.contains("likely")
+                || demangled.contains("black_box")
+                || demangled.contains("ignore")
+                || ignore_patterns.iter().any(|pat| demangled.contains(pat))
+            {
                 continue;
             }
 

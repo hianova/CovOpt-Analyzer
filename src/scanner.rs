@@ -124,8 +124,8 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
             if !scanner.found_magics.is_empty() {
                 println!("\n[{}]", scanner.file_path);
 
-                // Sort by line, then column, descending, to safely rewrite from end to start of line
-                scanner.found_magics.sort_by(|a, b| b.0.cmp(&a.0));
+                // Sort by line, then column, descending, to safely rewrite
+                scanner.found_magics.sort_by_key(|b| std::cmp::Reverse(b.0));
 
                 let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
                 let mut file_changed = false;

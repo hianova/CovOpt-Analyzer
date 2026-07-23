@@ -8,16 +8,16 @@ use covopt_macro::covopt_param;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn parse_complexity(s: &str) -> Complexity {
+fn parse_complexity(s: &str) -> Option<Complexity> {
     match s.to_uppercase().as_str() {
-        "O1" | "O(1)" => Complexity::O1,
-        "OLOGN" | "O(LOGN)" => Complexity::OLogN,
-        "ON" | "O(N)" => Complexity::ON,
-        "ONLOGN" | "O(NLOGN)" => Complexity::ONLogN,
-        "ON2" | "O(N2)" | "O(N^2)" => Complexity::ON2,
-        "O2N" | "O(2^N)" | "O(2N)" => Complexity::O2N,
-        "OSQRTN" | "O(SQRT(N))" | "O(SQRTN)" => Complexity::OSqrtN,
-        _ => panic!("Unknown complexity: {}", s),
+        "O1" | "O(1)" => Some(Complexity::O1),
+        "OLOGN" | "O(LOGN)" => Some(Complexity::OLogN),
+        "ON" | "O(N)" => Some(Complexity::ON),
+        "ONLOGN" | "O(NLOGN)" => Some(Complexity::ONLogN),
+        "ON2" | "O(N2)" | "O(N^2)" => Some(Complexity::ON2),
+        "O2N" | "O(2^N)" | "O(2N)" => Some(Complexity::O2N),
+        "OSQRTN" | "O(SQRT(N))" | "O(SQRTN)" => Some(Complexity::OSqrtN),
+        _ => None,
     }
 }
 
@@ -65,11 +65,13 @@ pub fn run_analysis(
     };
     let mut ast_expected = None;
     let mut ast_n_values = None;
-    if (args.expected.is_none() || args.n_values.is_none())
-        && let Some((e, n, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
-            ast_expected = Some(e);
-            ast_n_values = Some(n);
-        }
+    let mut ast_target_fn = None;
+    
+    if let Some((e, n, t, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
+        ast_expected = Some(e);
+        ast_n_values = Some(n);
+        ast_target_fn = t;
+    }
 
     let expected_str = match args.expected.as_ref().or(ast_expected.as_ref()) {
         Some(e) => e,
@@ -95,7 +97,13 @@ pub fn run_analysis(
     let mut discovered_target_line: Option<u64> = None;
     let mut target_symbol: Option<String> = None;
 
-    let expected = parse_complexity(expected_str);
+    let expected = match parse_complexity(expected_str) {
+        Some(c) => c,
+        None => {
+            wlog!(log, "[ERROR] Unknown complexity format: {}. Valid formats include O1, ON, ON2, etc.", expected_str);
+            return false;
+        }
+    };
 
     let _n_values: Vec<usize> = n_values_str
         .split(',')
@@ -181,49 +189,26 @@ pub fn run_analysis(
         };
 
         if target_symbol.is_none() {
-            let anchor = crate::static_analysis::find_covopt_track_anchor();
-            if let Some((anchor_f, anchor_l)) = anchor {
-                let filename_suffix = std::path::Path::new(&anchor_f)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&anchor_f);
-
-                wlog!(log, "DEBUG: Found anchor at {}:{}", anchor_f, anchor_l);
-
-                if let Some(sym) = map.find_symbol(filename_suffix, anchor_l) {
-                    discovered_target_file = Some(anchor_f.clone());
-                    discovered_target_line = Some(anchor_l);
-                    target_symbol = Some(sym.clone());
-                    wlog!(
-                        log,
-                        "Anchored target via covopt_track! at {}:{} ({})",
-                        anchor_f,
-                        anchor_l,
-                        sym
-                    );
-                } else {
-                    wlog!(
-                        log,
-                        "DEBUG: find_symbol returned None for {}, {}",
-                        filename_suffix,
-                        anchor_l
-                    );
-                }
-            } else {
-                wlog!(log, "DEBUG: find_covopt_track_anchor returned None");
-            }
-        }
-
-        if target_symbol.is_none() {
             let mut ignore_patterns = Vec::new();
             if let Some(ig_str) = &args.ignore {
                 ignore_patterns.extend(ig_str.split(',').map(|s| s.trim().to_string()));
             }
-            if let Some((f, l, sym, _)) = map.find_peak_location(&ignore_patterns) {
+
+            // [NEW] Dominant Complexity Auto-Detection! 
+            // By passing ast_target_fn, we restrict the peak search to the target function,
+            // finding the dynamically hottest path (dominant bottleneck) automatically.
+            if let Some((f, l, sym, _)) = map.find_peak_location(&ignore_patterns, ast_target_fn.as_deref()) {
                 discovered_target_file = Some(f.clone());
                 discovered_target_line = Some(l);
                 target_symbol = Some(sym.clone());
-                wlog!(log, "Auto-discovered target: {}:{} ({})", f, l, sym);
+                
+                if let Some(ref t_fn) = ast_target_fn {
+                    wlog!(log, "Auto-discovered dominant target in {}: {}:{} ({})", t_fn, f, l, sym);
+                } else {
+                    wlog!(log, "Auto-discovered global peak target: {}:{} ({})", f, l, sym);
+                }
+            } else {
+                wlog!(log, "DEBUG: find_peak_location returned None");
             }
         }
 

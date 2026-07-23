@@ -51,7 +51,9 @@ pub fn covopt_param(input: TokenStream) -> TokenStream {
 ///
 /// # Example
 /// ```rust
-/// #[covopt_test]
+/// use covopt_macro::covopt_test;
+///
+/// #[covopt_test(target_fn = "test_my_algorithm", expected = "ON")]
 /// fn test_my_algorithm(n: usize) {
 ///     // algorithm body...
 /// }
@@ -91,76 +93,4 @@ pub fn covopt_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Explicitly anchor the `CovOpt-Analyzer` static analyzer to a specific line.
-///
-/// This macro compiles to `std::hint::black_box(())` to prevent dead code elimination
-/// of the anchoring mechanism, but its primary purpose is for the `covopt` CLI tool
-/// to parse the AST and find exactly which source line it should track hit counts for.
-#[proc_macro]
-pub fn track(_input: TokenStream) -> TokenStream {
-    TokenStream::from(quote! {
-        std::hint::black_box(());
-    })
-}
 
-/// Automatically injects `std::hint::black_box` to prevent Dead Code Elimination (DCE).
-///
-/// Wraps all input parameters and the final return value in `std::hint::black_box`.
-#[proc_macro_attribute]
-pub fn no_dce(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut input_fn = parse_macro_input!(item as ItemFn);
-    let orig_body = input_fn.block;
-
-    let mut param_shadows = proc_macro2::TokenStream::new();
-    for input in &input_fn.sig.inputs {
-        if let syn::FnArg::Typed(pat_type) = input {
-            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                let ident = &pat_ident.ident;
-                param_shadows.extend(quote! {
-                    #[allow(unused_mut)]
-                    let mut #ident = std::hint::black_box(#ident);
-                });
-            }
-        }
-    }
-
-    let expanded_body = quote! {
-        {
-            #param_shadows
-            let __covopt_res = #orig_body;
-            std::hint::black_box(__covopt_res)
-        }
-    };
-    input_fn.block = syn::parse2(expanded_body).unwrap();
-    TokenStream::from(quote! { #input_fn })
-}
-
-/// Generates a Structure of Arrays (SoA) variant for a struct.
-#[proc_macro_derive(SoA)]
-pub fn derive_soa(input: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(input as syn::DeriveInput);
-    let name = &input.ident;
-    let soa_name = syn::Ident::new(&format!("{}Soa", name), name.span());
-
-    let fields = if let syn::Data::Struct(syn::DataStruct {
-        fields: syn::Fields::Named(fields),
-        ..
-    }) = &input.data
-    {
-        fields.named.iter().map(|f| {
-            let fname = &f.ident;
-            let ftype = &f.ty;
-            quote! { pub #fname: Vec<#ftype> }
-        })
-    } else {
-        panic!("SoA derive only supports structs with named fields");
-    };
-
-    let expanded = quote! {
-        pub struct #soa_name {
-            #(#fields,)*
-        }
-    };
-
-    TokenStream::from(expanded)
-}

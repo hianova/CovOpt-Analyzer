@@ -642,16 +642,14 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     }
     if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
         violations.push(
-            "Standard library (`std`) usage is prohibited. Must be `#![no_std]
-use alloc::vec::Vec;`."
+            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`."
                 .to_string(),
         );
     }
 
     if !source_file.components().any(|c| c.as_os_str() == "tests") && !check_crate_root_no_std() {
         violations.push(
-            "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]
-use alloc::vec::Vec;`. Aerospace grade requires strict no_std environment."
+            "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]`. Aerospace grade requires strict no_std environment."
                 .to_string(),
         );
     }
@@ -860,7 +858,7 @@ pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
     item_fn.sig.inputs.len()
 }
 
-pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, PathBuf)> {
+pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Option<String>, PathBuf)> {
     let walker = walkdir::WalkDir::new(".")
         .into_iter()
         .filter_entry(|e| {
@@ -891,6 +889,7 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Pat
                                         && let syn::Meta::List(list) = &attr.meta {
                                             let mut expected = None;
                                             let mut n_values = None;
+                                            let mut target_fn = None;
 
                                             // Quick extraction from stringified tokens
                                             // Example: expected = "O(N)" , n_values = "10,20"
@@ -905,46 +904,19 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Pat
                                                         expected = Some(val.to_string());
                                                     } else if key == "n_values" {
                                                         n_values = Some(val.to_string());
+                                                    } else if key == "target_fn" {
+                                                        target_fn = Some(val.to_string());
                                                     }
                                                 }
                                             }
                                             if let (Some(e), Some(n)) = (expected, n_values) {
-                                                return Some((e, n, entry.path().to_path_buf()));
+                                                return Some((e, n, target_fn, entry.path().to_path_buf()));
                                             }
                                         }
                                 }
                             }
                     }
                 }
-    }
-    None
-}
-
-pub fn find_covopt_track_anchor() -> Option<(String, u64)> {
-    let walker = walkdir::WalkDir::new(".")
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            name != "target" && name != ".git" && name != ".covopt"
-        })
-        .filter_map(|e| e.ok());
-
-    for entry in walker {
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
-            && let Ok(content) = fs::read_to_string(entry.path()) {
-                for (i, line) in content.lines().enumerate() {
-                    if line.contains("covopt_track!")
-                        || line.contains("covopt::track!")
-                        || line.contains("covopt_macro::track!")
-                    {
-                        // Canonicalize path to help LLVM-COV matching
-                        let full_path = std::fs::canonicalize(entry.path())
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|_| entry.path().to_string_lossy().to_string());
-                        return Some((full_path, (i + 1) as u64));
-                    }
-                }
-            }
     }
     None
 }
@@ -972,7 +944,7 @@ pub fn resolve_package_for_target(
     if let Some(pkg) = configured_package {
         return Some(pkg.clone());
     }
-    if let Some((_, _, path)) = find_covopt_test_metadata(test_name)
+    if let Some((_, _, _, path)) = find_covopt_test_metadata(test_name)
         && let Some(pkg) = find_package_for_file(&path) {
             return Some(pkg);
         }

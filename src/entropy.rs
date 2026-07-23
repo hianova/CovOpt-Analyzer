@@ -102,7 +102,7 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
 
             if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
                 && let Some((_, _, _, hits)) =
-                    map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]))
+                    map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]), None)
             {
                 Some(hits as f64)
             } else {
@@ -185,7 +185,7 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
         if let Ok((map, _)) = runner.run(covopt_param!("M_170_41", 100), None) {
             let mut lines = std::collections::HashSet::new();
             if let Some((target_file, _, _, _)) =
-                map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]))
+                map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]), None)
             {
                 for (file, file_cov) in &map.hit_counts {
                     if file == &target_file {

@@ -17,13 +17,18 @@ pub fn schedule_task(queue: &mut VecDeque<ThreadTask>, task: ThreadTask) {
     queue.push_back(black_box(task));
 }
 
+use covopt_macro::covopt_test;
+
 #[cfg(test)]
-#[test]
-fn ruinsos_scheduler() {
-    let n: usize = std::env::var("COVOPT_N")
-        .unwrap_or_else(|_| "100".to_string())
-        .parse()
-        .unwrap_or(covopt_param!("M_25_19", 100));
+#[covopt_test(target_fn = "schedule_task", expected = "O1")]
+fn ruinsos_scheduler(n: usize) {
+    let mut sum = 0;
+    // O(N) Dummy Initialization Loop
+    // Dominant Complexity Auto-Detection should completely ignore this loop
+    for i in 0..n {
+        sum += i;
+        std::hint::black_box(sum);
+    }
 
     let mut queue = VecDeque::new();
 

@@ -270,10 +270,26 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
             );
         }
 
-        #[cfg(target_arch = "aarch64")]
-        let target = "aarch64-apple-darwin";
-        #[cfg(target_arch = "x86_64")]
-        let target = "x86_64-apple-darwin";
+        let arch = std::env::consts::ARCH;
+        let os = std::env::consts::OS;
+        
+        let target = match (arch, os) {
+            ("aarch64", "macos") => "aarch64-apple-darwin",
+            ("x86_64", "macos") => "x86_64-apple-darwin",
+            ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+            ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+            ("x86_64", "windows") => {
+                if san_type == "thread" {
+                    eprintln!("ThreadSanitizer is currently unsupported on Windows target.");
+                    return false;
+                }
+                "x86_64-pc-windows-msvc"
+            }
+            _ => {
+                eprintln!("Unsupported architecture or OS for sanitizers: {}-{}", arch, os);
+                return false;
+            }
+        };
 
         let z_sanitizer = format!("-Zsanitizer={}", san_type);
 
