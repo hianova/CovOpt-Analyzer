@@ -5,6 +5,7 @@ pub mod auto_fixer;
 pub mod auto_harness;
 pub mod auto_refactor;
 pub mod auto_simd;
+pub mod cache;
 pub mod ci;
 pub mod commands;
 pub mod config;

@@ -1,8 +1,9 @@
 use covopt_macro::covopt_param;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct McaReport {
     pub instructions: usize,
     pub total_cycles: usize,

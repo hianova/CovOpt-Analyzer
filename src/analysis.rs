@@ -370,6 +370,13 @@ pub fn run_analysis(args: &RunArgs, compact: bool) -> bool {
                                 mca_report.block_rthroughput
                             );
                             wlog!(log, "IPC:               {:.2}", mca_report.ipc);
+                            
+                            crate::cache::save_mca_cache(
+                                std::path::Path::new(&target_file),
+                                &symbol,
+                                &mca_report,
+                            );
+                            
                             mca_stats = Some((mca_report.ipc, mca_report.block_rthroughput));
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),

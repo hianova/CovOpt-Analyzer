@@ -552,6 +552,13 @@ pub fn run_analysis(
                                 mca_report.block_rthroughput
                             );
                             wlog!(log, "IPC:               {:.2}", mca_report.ipc);
+                            
+                            crate::cache::save_mca_cache(
+                                std::path::Path::new(&target_file),
+                                &symbol,
+                                &mca_report,
+                            );
+                            
                             mca_stats = Some((mca_report.ipc, mca_report.block_rthroughput));
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
@@ -1198,25 +1205,39 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
         files_to_analyze.len()
     );
 
+    let mut all_cached = true;
+    for file_path in &files_to_analyze {
+        if !crate::cache::is_file_cache_valid(file_path) {
+            all_cached = false;
+            break;
+        }
+    }
+
     // Initialize ASM Extractor
     use crate::asm_extractor::AsmExtractor;
-    println!("  [Phase 1] Compiling target to extract assembly (--emit=asm)...");
-    let asm_extractor_opt = match std::env::current_dir() {
-        Ok(dir) => {
-            let extractor = AsmExtractor::new(dir);
-            if let Err(e) = extractor.compile_asm() {
-                println!(
-                    "  [Warning] ASM compilation failed: {}. Continuing with static AST only.",
-                    e
-                );
-                None
-            } else {
-                println!("  [OK] Assembly generated successfully.");
-                Some(extractor)
+    let mut asm_extractor_opt = None;
+
+    if all_cached {
+        println!("  [Phase 1] Cache hit for all targets! Skipping assembly compilation.");
+    } else {
+        println!("  [Phase 1] Compiling target to extract assembly (--emit=asm)...");
+        asm_extractor_opt = match std::env::current_dir() {
+            Ok(dir) => {
+                let extractor = AsmExtractor::new(dir);
+                if let Err(e) = extractor.compile_asm() {
+                    println!(
+                        "  [Warning] ASM compilation failed: {}. Continuing with static AST only.",
+                        e
+                    );
+                    None
+                } else {
+                    println!("  [OK] Assembly generated successfully.");
+                    Some(extractor)
+                }
             }
-        }
-        Err(_) => None,
-    };
+            Err(_) => None,
+        };
+    }
 
     let mut collected_asm_blocks: Vec<(String, String)> = Vec::new();
 
@@ -1272,10 +1293,12 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                     continue;
                 }
 
-                // For now, we run without MCA report (static AST only).
                 let mut asm_block_size = None;
-                let mut mca_report_opt = None;
-                if let Some(ref asm_extractor) = asm_extractor_opt
+                let mut mca_report_opt = crate::cache::load_mca_cache(&file_path, &name);
+                
+                if mca_report_opt.is_some() {
+                    // Cache Hit
+                } else if let Some(ref asm_extractor) = asm_extractor_opt
                     && let Ok(asm) = asm_extractor.extract_function(&name)
                 {
                     asm_block_size = Some(asm.len());
@@ -1283,6 +1306,7 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                     use crate::mca::McaRunner;
                     let runner = McaRunner::new(None);
                     if let Ok(report) = runner.run(&asm) {
+                        crate::cache::save_mca_cache(&file_path, &name, &report);
                         mca_report_opt = Some(report);
                     }
                 }
