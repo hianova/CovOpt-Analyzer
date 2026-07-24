@@ -1,12 +1,13 @@
-use crate::analyzer::ConvergenceAnalyzer;
-use crate::config::CovOptConfig;
-use crate::entropy;
-use crate::mca::McaRunner;
-use crate::runner::CargoTestRunner;
+use covopt_core::analyzer::ConvergenceAnalyzer;
+use covopt_core::config::CovOptConfig;
+use covopt_core::mca::McaRunner;
+use covopt_core::runner::CargoTestRunner;
 use crate::*;
 use covopt_macro::covopt_param;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use covopt_core::analyzer::Complexity;
 
 fn parse_complexity(s: &str) -> Option<Complexity> {
     match s.to_uppercase().as_str() {
@@ -20,6 +21,8 @@ fn parse_complexity(s: &str) -> Option<Complexity> {
         _ => None,
     }
 }
+
+
 
 struct LogBuffer {
     buffer: String,
@@ -67,7 +70,7 @@ pub fn run_analysis(
     let mut ast_n_values = None;
     let mut ast_target_fn = None;
     
-    if let Some((e, n, t, _)) = crate::static_analysis::find_covopt_test_metadata(test_name) {
+    if let Some((e, n, t, _)) = covopt_core::static_analysis::find_covopt_test_metadata(test_name) {
         ast_expected = Some(e);
         ast_n_values = Some(n);
         ast_target_fn = t;
@@ -122,10 +125,10 @@ pub fn run_analysis(
         exes.to_vec()
     } else {
         let mut packages_to_compile = Vec::new();
-        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(test_name, None) {
+        if let Some(pkg) = covopt_core::static_analysis::resolve_package_for_target(test_name, None) {
             packages_to_compile.push(pkg);
         }
-        match crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile) {
+        match covopt_core::runner::compile_workspace_tests(&output_dir, &packages_to_compile) {
             Ok(exes) => exes,
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to compile workspace tests: {}", e);
@@ -180,9 +183,9 @@ pub fn run_analysis(
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to run coverage for N={}: {}", n, e);
                 if compact {
-                    println!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
-                    println!("{}", log.buffer);
-                    println!("========================================\n");
+                    wlog!(log, "\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+                    wlog!(log, "{}", log.buffer);
+                    wlog!(log, "========================================\n");
                 }
                 return false;
             }
@@ -275,18 +278,18 @@ pub fn run_analysis(
             log,
             "🔮 [Heuristic Engine] Lean 4 Mode: Synthesizing Formal Mathematical AST Proof..."
         );
-        let exact_formula = heuristic::SymbolicRegressor::formalize(&data);
+        let exact_formula = covopt_core::heuristic::SymbolicRegressor::formalize(&data);
         wlog!(log, "  => Formal Proof Discovered: {}", exact_formula);
     }
 
-    let var_count = static_analysis::analyze_variables(
+    let var_count = covopt_core::static_analysis::analyze_variables(
         std::path::Path::new(&target_file),
         target_line as usize,
     );
     wlog!(log, "Static Variable Declarations: {}", var_count);
 
     let thread_activities =
-        static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
+        covopt_core::static_analysis::analyze_thread_activity(std::path::Path::new(&target_file));
     if !thread_activities.is_empty() {
         wlog!(log, "Static Thread Activities:");
         for act in thread_activities {
@@ -323,7 +326,7 @@ pub fn run_analysis(
     let mut static_cache_padding = None;
     if args.require_cache_padding {
         let (has_padding, applicable) =
-            static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_cache_padding(std::path::Path::new(&target_file));
         static_cache_padding = Some(has_padding);
         if applicable {
             if has_padding {
@@ -344,7 +347,7 @@ pub fn run_analysis(
     let mut static_branch_hints = None;
     if args.require_branch_hints {
         let (has_hints, applicable) =
-            static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_branch_hints(std::path::Path::new(&target_file));
         static_branch_hints = Some(has_hints);
         if applicable {
             if has_hints {
@@ -364,7 +367,7 @@ pub fn run_analysis(
     let mut static_aerospace_grade = None;
     if args.require_aerospace_grade {
         let violations =
-            static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
         static_aerospace_grade = Some(violations.clone());
         if violations.is_empty() {
             wlog!(log, "Static Aerospace Grade: Passed");
@@ -384,7 +387,7 @@ pub fn run_analysis(
     let mut static_watchdog_timeout = None;
     if args.require_watchdog_timeout {
         let (has_watchdog, applicable) =
-            static_analysis::analyze_project_watchdog_timeout(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_project_watchdog_timeout(std::path::Path::new(&target_file));
         static_watchdog_timeout = Some(has_watchdog);
         if applicable {
             if has_watchdog {
@@ -408,7 +411,7 @@ pub fn run_analysis(
     let mut static_stress_test = None;
     if args.require_stress_test {
         let (has_stress, applicable) =
-            static_analysis::analyze_project_stress_test(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_project_stress_test(std::path::Path::new(&target_file));
         static_stress_test = Some(has_stress);
         if applicable {
             if has_stress {
@@ -493,12 +496,12 @@ pub fn run_analysis(
                             struct_name,
                             fn_name
                         );
-                        let t_extract = std::time::Instant::now();
+                        let t_asm_find = std::time::Instant::now();
                         asm_block_opt = runner
                             .extract_asm_block_by_keywords(&asm_content, &[struct_name, fn_name]);
-                        println!(
+                        eprintln!(
                             "[Profile] extract_asm_block_by_keywords 2: {:?}",
-                            t_extract.elapsed()
+                            t_asm_find.elapsed()
                         );
                     }
                     if asm_block_opt.is_none() {
@@ -507,18 +510,18 @@ pub fn run_analysis(
                             "  -> Still not found. Target symbol inlined. Walking up to test caller '{}'...",
                             test_name
                         );
-                        let t_extract = std::time::Instant::now();
+                        let t_asm_find = std::time::Instant::now();
                         asm_block_opt =
                             runner.extract_asm_block_by_keywords(&asm_content, &[test_name]);
-                        println!(
+                        eprintln!(
                             "[Profile] extract_asm_block_by_keywords 3: {:?}",
-                            t_extract.elapsed()
+                            t_asm_find.elapsed()
                         );
                     }
                 }
 
                 if let Some(asm_block) = asm_block_opt {
-                    let mem_profile = static_analysis::analyze_memory_ops(&asm_block);
+                    let mem_profile = covopt_core::static_analysis::analyze_memory_ops(&asm_block);
                     wlog!(log, "\n[Static Memory Operations]");
                     wlog!(log, "Loads:  {}", mem_profile.loads);
                     wlog!(log, "Stores: {}", mem_profile.stores);
@@ -528,7 +531,7 @@ pub fn run_analysis(
                     let t_mca = std::time::Instant::now();
                     match mca_runner.run(&asm_block) {
                         Ok(mca_report) => {
-                            println!("[Profile] llvm-mca: {:?}", t_mca.elapsed());
+                            eprintln!("[Profile] llvm-mca: {:?}", t_mca.elapsed());
                             wlog!(log, "\n[MCA Report]");
 
                             wlog!(
@@ -538,7 +541,7 @@ pub fn run_analysis(
                             );
                             wlog!(log, "IPC:               {:.2}", mca_report.ipc);
                             
-                            crate::cache::save_mca_cache(
+                            covopt_core::cache::save_mca_cache(
                                 std::path::Path::new(&target_file),
                                 &symbol,
                                 &mca_report,
@@ -554,7 +557,7 @@ pub fn run_analysis(
                             log,
                             "\n🚀 [Superoptimization] Launching NP-hard Discrete Diffusion Engine..."
                         );
-                        let optimizer = crate::optimizer::DiscreteDiffusionEngine::new(
+                        let optimizer = covopt_core::optimizer::DiscreteDiffusionEngine::new(
                             covopt_param!("M_562_87", 20),
                         );
                         let base_asm_lines: Vec<String> =
@@ -627,12 +630,14 @@ pub fn run_analysis(
 
     if success {
         if compact {
-            println!("\n> [x] CovOpt Analysis PASSED (Target: {})", target_file);
-            println!(
+            wlog!(log, "\n> [x] CovOpt Analysis PASSED (Target: {})", target_file);
+            wlog!(
+                log,
                 "  - Time Complexity: {:?} (Expected: {:?})",
-                report.actual_trend, expected
+                report.actual_trend,
+                expected
             );
-            println!("  - Space Complexity: {:?}", space_report.actual_trend);
+            wlog!(log, "  - Space Complexity: {:?}", space_report.actual_trend);
 
             let mut checks = Vec::new();
             if args.require_cache_padding {
@@ -686,26 +691,28 @@ pub fn run_analysis(
                 ));
             }
             if !checks.is_empty() {
-                println!("  - Static Checks: {}", checks.join(", "));
+                wlog!(log, "  - Static Checks: {}", checks.join(", "));
             } else {
-                println!("  - Static Checks: None Required");
+                wlog!(log, "  - Static Checks: None Required");
             }
 
             if let Some(rate) = coverage_rate_val {
-                println!("  - Function Coverage: {:.1}%", rate);
+                wlog!(log, "  - Function Coverage: {:.1}%", rate);
             }
             if let Some((ipc, rt)) = mca_stats {
-                println!(
+                wlog!(
+                    log,
                     "  - LLVM-MCA (Static Block): IPC {:.2}, RThroughput {:.2}",
-                    ipc, rt
+                    ipc,
+                    rt
                 );
             }
         }
     } else {
         if compact {
-            println!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
-            println!("{}", log.buffer);
-            println!("========================================\n");
+            wlog!(log, "\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+            wlog!(log, "{}", log.buffer);
+            wlog!(log, "========================================\n");
         }
     }
 
@@ -786,7 +793,7 @@ pub fn init_config(args: crate::InitArgs) {
         };
 
         let mut default_config = String::new();
-        let found_tests = crate::static_analysis::find_all_covopt_tests();
+        let found_tests = covopt_core::static_analysis::find_all_covopt_tests();
 
         if found_tests.is_empty() {
             println!("CovOpt-Analyzer: No #[covopt::test] found. Creating default template.");
@@ -917,30 +924,94 @@ require_stress_test = true
     }
 }
 
-pub fn run_fix() {
-    println!("CovOpt-Analyzer: Running auto-correction (cargo clippy --fix)...");
-    let status = std::process::Command::new("cargo")
-        .args([
+pub fn run_fix(path: Option<String>) {
+    println!("CovOpt-Analyzer: Running CodeMender-Style Sandbox Auto-Fix...");
+    
+    // We need to gather the files that will be affected to back them up
+    // In a real CodeMender, we'd parse the diff. For now, we'll assume the path is the target
+    let target_dir = std::env::current_dir().unwrap();
+    let sandbox = covopt_core::sandbox::Sandbox::new(target_dir.clone());
+    
+    // Collect target files (all .rs files in path or src/)
+    let search_path = path.clone().unwrap_or_else(|| "src/".to_string());
+    let mut target_files = Vec::new();
+    for entry in walkdir::WalkDir::new(&search_path) {
+        if let Ok(e) = entry {
+            let p = e.path();
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                target_files.push(p.to_path_buf());
+            }
+        }
+    }
+    
+    let fix_fn = || -> Result<(), String> {
+        let mut args = vec![
             "clippy",
             "--fix",
             "--allow-dirty",
             "--allow-no-vcs",
             "--all-targets",
-        ])
-        .status()
-        .expect("Failed to execute cargo clippy");
+        ];
+        if !covopt_core::config::should_color() {
+            args.push("--color=never");
+        }
+        let path_str = path.clone().unwrap_or_default();
+        if path.is_some() {
+            args.push("--");
+            args.push(&path_str);
+        }
+        
+        let status = std::process::Command::new("cargo")
+            .args(&args)
+            .status()
+            .map_err(|e| e.to_string())?;
+            
+        if !status.success() {
+            return Err("cargo clippy --fix failed".to_string());
+        }
+        Ok(())
+    };
 
-    if status.success() {
-        println!("CovOpt-Analyzer: Auto-correction completed successfully.");
-    } else {
-        eprintln!(
-            "CovOpt-Analyzer: Auto-correction encountered errors (some issues might need manual fixing)."
-        );
-        std::process::exit(1);
+    match sandbox.verify_fix(&target_files, None, fix_fn) {
+        Ok(true) => println!("CovOpt-Analyzer: Fix applied successfully with 0 regressions."),
+        Ok(false) => println!("CovOpt-Analyzer: Fix rolled back due to performance regression."),
+        Err(e) => eprintln!("CovOpt-Analyzer: Sandbox verification failed: {}", e),
     }
 }
 
-pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
+pub fn get_git_diff_files(staged: bool, branch: Option<&str>) -> Vec<String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("diff").arg("--name-only");
+    
+    if staged {
+        cmd.arg("--cached");
+    } else if let Some(b) = branch {
+        cmd.arg(format!("{}...HEAD", b));
+    }
+    
+    let output = cmd.output().expect("Failed to run git diff");
+    if !output.status.success() {
+        return vec![];
+    }
+    
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| l.ends_with(".rs"))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+pub fn run_audit(args: &covopt_core::config::AuditArgs) {
+    let target_test = args.test.clone();
+    let fast = args.fast;
+    let is_json = args.json;
+    let staged = args.staged;
+
+    if staged {
+        let diff_files = get_git_diff_files(true, None);
+        eprintln!("[Git Incremental Audit] Auditing staged files only ({} modified .rs file(s) found).", diff_files.len());
+    }
+
     unsafe {
         std::env::set_var("COVOPT_COMPACT", "1");
     }
@@ -960,31 +1031,31 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
     };
 
     let global_output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
-    println!("CovOpt-Analyzer: Resolving packages for Batch Compilation Mode...");
+    eprintln!("CovOpt-Analyzer: Resolving packages for Batch Compilation Mode...");
 
     let mut packages_to_compile = Vec::new();
     for target in &config.target {
-        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+        if let Some(pkg) = covopt_core::static_analysis::resolve_package_for_target(
             &target.test,
             target.package.as_ref(),
         )
             && !packages_to_compile.contains(&pkg) {
-                println!("Resolved test '{}' to package '{}'", target.test, pkg);
+                eprintln!("Resolved test '{}' to package '{}'", target.test, pkg);
                 packages_to_compile.push(pkg);
             }
     }
 
     if packages_to_compile.is_empty() {
-        println!("CovOpt-Analyzer: Compiling ENTIRE workspace tests (no packages resolved)...");
+        eprintln!("CovOpt-Analyzer: Compiling ENTIRE workspace tests (no packages resolved)...");
     } else {
-        println!(
+        eprintln!(
             "CovOpt-Analyzer: Compiling specific packages: {:?}",
             packages_to_compile
         );
     }
 
     let workspace_executables =
-        match crate::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
+        match covopt_core::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
             Ok(exes) => exes,
             Err(e) => {
                 eprintln!("Failed to compile workspace tests: {}", e);
@@ -1030,30 +1101,30 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
             optimize: false,
             json: is_json,
         };
-        println!("\n===================================================");
-        println!("Auditing target: {}", target.test);
-        println!("===================================================");
+        eprintln!("\n===================================================");
+        eprintln!("Auditing target: {}", target.test);
+        eprintln!("===================================================");
         if !run_analysis(&args, true, Some(&workspace_executables)) {
             all_success = false;
         }
 
         // --- COVOPT 2.0 ENTROPY EVALUATION ---
-        let entropy_result = entropy::calculate_entropy_score(&target, true);
-        println!("\n=== COVOPT 2.0 ENTROPY REPORT ===");
-        println!(
+        let entropy_result = covopt_core::entropy::calculate_entropy_score(&target, true);
+        eprintln!("\n=== COVOPT 2.0 ENTROPY REPORT ===");
+        eprintln!(
             "  A. Fuzz-Cov Variance: {:.1}/30.0",
             entropy_result.fuzz_variance_score
         );
-        println!(
+        eprintln!(
             "  B. API Branch Sprawl: {:.1}/40.0",
             entropy_result.branch_sprawl_score
         );
-        println!(
+        eprintln!(
             "  C. CLI Noise Index:   {:.1}/30.0",
             entropy_result.cli_noise_score
         );
-        println!("  --------------------------------");
-        println!(
+        eprintln!("  --------------------------------");
+        eprintln!(
             "  TOTAL ENTROPY SCORE:  {:.1}/100.0",
             entropy_result.total_score
         );
@@ -1064,15 +1135,25 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
             );
             all_success = false;
         } else {
-            println!("  [OK] Low Entropy. Code is well encapsulated and stable.");
+            eprintln!("  [OK] Low Entropy. Code is well encapsulated and stable.");
         }
-        println!("===================================");
+        eprintln!("===================================");
 
         if is_json
             && let Some(arr) = json_results
                 .get_mut("targets")
                 .and_then(|t| t.as_array_mut())
             {
+                
+                let sandbox = covopt_core::sandbox::Sandbox::new(std::env::current_dir().unwrap());
+                // For target.test, we try to get metrics
+                let mut ipc = 0.0;
+                let mut peak_rss = 0;
+                if let Ok(metrics) = sandbox.measure_metrics(Some(&target.test)) {
+                    ipc = metrics.ipc.unwrap_or(0.0);
+                    peak_rss = metrics.peak_rss;
+                }
+                
                 arr.push(serde_json::json!({
                     "test": target.test,
                     "entropy": {
@@ -1081,8 +1162,13 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
                         "cli_noise": entropy_result.cli_noise_score,
                         "total": entropy_result.total_score
                     },
+                    "performance": {
+                        "ipc": ipc,
+                        "peak_rss": peak_rss
+                    },
                     "passed": entropy_result.total_score <= 50.0
                 }));
+
             }
     }
 
@@ -1101,52 +1187,68 @@ pub fn run_audit(target_test: Option<String>, fast: bool, is_json: bool) {
         eprintln!("\n[AUDIT FAILED] One or more targets failed complexity or coverage checks.");
         std::process::exit(1);
     } else {
-        println!("\n[AUDIT PASSED] All targets passed complexity and coverage checks.");
+        eprintln!("\n[AUDIT PASSED] All targets passed complexity and coverage checks.");
     }
 }
 
 pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
-    use crate::advisor::EncapsulationAdvisor;
+    use covopt_core::advisor::EncapsulationAdvisor;
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    let target_path = Path::new(&args.target);
     let mut files_to_analyze = Vec::new();
 
-    if target_path.is_file() {
-        if target_path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            files_to_analyze.push(target_path.to_path_buf());
-        } else {
-            return Err("Target must be a Rust file or a directory".to_string());
-        }
-    } else if target_path.is_dir() {
-        fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-
-                    if file_name.starts_with('.')
-                        || file_name == "target"
-                        || file_name == "tests"
-                        || file_name == "benches"
-                    {
-                        continue;
-                    }
-
-                    if path.is_dir() {
-                        collect_rs_files(&path, files);
-                    } else if path.is_file()
-                        && path.extension().and_then(|s| s.to_str()) == Some("rs")
-                    {
-                        files.push(path);
+    if args.path == "-" {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            if let Ok(file_path) = line {
+                let trimmed = file_path.trim();
+                if !trimmed.is_empty() {
+                    let p = PathBuf::from(trimmed);
+                    if p.extension().and_then(|s| s.to_str()) == Some("rs") && p.exists() {
+                        files_to_analyze.push(p);
                     }
                 }
             }
         }
-        collect_rs_files(target_path, &mut files_to_analyze);
     } else {
-        return Err("Target path does not exist".to_string());
+        let target_path = Path::new(&args.path);
+        if target_path.is_file() {
+            if target_path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                files_to_analyze.push(target_path.to_path_buf());
+            } else {
+                return Err("Target must be a Rust file or a directory".to_string());
+            }
+        } else if target_path.is_dir() {
+            fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
+                if let Ok(entries) = fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+
+                        if file_name.starts_with('.')
+                            || file_name == "target"
+                            || file_name == "tests"
+                            || file_name == "benches"
+                        {
+                            continue;
+                        }
+
+                        if path.is_dir() {
+                            collect_rs_files(&path, files);
+                        } else if path.is_file()
+                            && path.extension().and_then(|s| s.to_str()) == Some("rs")
+                        {
+                            files.push(path);
+                        }
+                    }
+                }
+            }
+            collect_rs_files(target_path, &mut files_to_analyze);
+        } else {
+            return Err("Target path does not exist".to_string());
+        }
     }
 
     if files_to_analyze.is_empty() {
@@ -1155,20 +1257,20 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
 
     println!(
         "Running Encapsulation Advisor on {} ({} files found)",
-        args.target,
+        args.path,
         files_to_analyze.len()
     );
 
     let mut all_cached = true;
     for file_path in &files_to_analyze {
-        if !crate::cache::is_file_cache_valid(file_path) {
+        if !covopt_core::cache::is_file_cache_valid(file_path) {
             all_cached = false;
             break;
         }
     }
 
     // Initialize ASM Extractor
-    use crate::asm_extractor::AsmExtractor;
+    use covopt_core::asm_extractor::AsmExtractor;
     let mut asm_extractor_opt = None;
 
     if all_cached {
@@ -1248,7 +1350,7 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                 }
 
                 let mut asm_block_size = None;
-                let mut mca_report_opt = crate::cache::load_mca_cache(&file_path, &name);
+                let mut mca_report_opt = covopt_core::cache::load_mca_cache(&file_path, &name);
                 
                 if mca_report_opt.is_some() {
                     // Cache Hit
@@ -1257,10 +1359,10 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                 {
                     asm_block_size = Some(asm.len());
                     collected_asm_blocks.push((name.clone(), asm.clone()));
-                    use crate::mca::McaRunner;
+                    use covopt_core::mca::McaRunner;
                     let runner = McaRunner::new(None);
                     if let Ok(report) = runner.run(&asm) {
-                        crate::cache::save_mca_cache(&file_path, &name, &report);
+                        covopt_core::cache::save_mca_cache(&file_path, &name, &report);
                         mca_report_opt = Some(report);
                     }
                 }

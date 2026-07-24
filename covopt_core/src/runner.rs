@@ -149,6 +149,10 @@ pub fn compile_workspace_tests(
         .arg("--no-run")
         .arg("--message-format=json");
 
+    if !crate::config::should_color() {
+        cmd.arg("--color=never");
+    }
+
     for pkg in packages {
         cmd.arg("-p").arg(pkg);
     }
@@ -243,13 +247,13 @@ impl CargoTestRunner {
         let map = CoverageMap::from_lcov(&lcov_str)?;
         let t6 = std::time::Instant::now();
 
-        println!(
+        eprintln!(
             "[Profile] execute_tests (incl. OS process spawn overhead): {:?}",
             t3.duration_since(t2)
         );
-        println!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
-        println!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
-        println!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
+        eprintln!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
+        eprintln!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
+        eprintln!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
 
         let _ = std::fs::write(
             self.output_dir.join(format!("covopt_debug_{}.json", n)),
@@ -323,7 +327,7 @@ impl CargoTestRunner {
                     if std::env::var("COVOPT_COMPACT").is_err() {
                         println!("Test ran successfully.");
                     }
-                    println!("DEBUG: successful_exe = {}", exe.display());
+                    eprintln!("DEBUG: successful_exe = {}", exe.display());
                     successful_exe = Some(exe.clone());
                 }
             }

@@ -1,9 +1,9 @@
+#![allow(dead_code)]
 use covopt_macro::covopt_param;
 #[allow(unused_imports)]
 use std::thread;
 use std::time::Duration;
 use std::fs;
-use std::sync::Mutex;
 
 // 1. Thread Physical Overbound Cache Thresh (Spawning thread inside a loop)
 fn trigger_thread_overbound() {

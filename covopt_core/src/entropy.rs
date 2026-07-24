@@ -84,10 +84,8 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
         .unwrap_or_default();
     let runner = crate::runner::CargoTestRunner::new(&config.test, &output_dir, executables);
 
-    use rayon::prelude::*;
-
     let hit_counts: Vec<f64> = (0..iterations)
-        .into_par_iter()
+        .into_iter()
         .filter_map(|i| {
             let seed = i as u64 * covopt_param!("M_85_34", 1337) + covopt_param!("M_85_41", 1000);
             let iter_dir = tempfile::tempdir()
@@ -112,10 +110,12 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
         .collect();
 
     if hit_counts.is_empty() {
-        let _ = writeln!(
-            details,
+        let msg = if crate::config::should_color() {
             "     \x1b[31m[WARN] Failed to gather Fuzz-Cov data. (Did your test panic or lack loops?) Defaulting to 15.0 penalty.\x1b[0m"
-        );
+        } else {
+            "     [WARN] Failed to gather Fuzz-Cov data. (Did your test panic or lack loops?) Defaulting to 15.0 penalty."
+        };
+        let _ = writeln!(details, "{}", msg);
         return covopt_param!("M_107_15", 15.0);
     }
 

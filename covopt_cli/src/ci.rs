@@ -1,4 +1,4 @@
-use crate::config::CovOptConfig;
+use covopt_core::config::CovOptConfig;
 use crate::harden;
 use crate::{CiArgs, commands};
 use covopt_macro::covopt_param;
@@ -10,14 +10,15 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
 
     // Step 1: Clean & Format (Fix)
     if config.pipeline.run_fix {
-        println!("▶️ Step 1: Running `covopt fix`...");
-        commands::run_fix();
+        println!("Step 1: Running Auto-Fix (cargo clippy --fix & magic numbers)...");
+        commands::run_fix(None);
+        covopt_core::scanner::run_scan(None, true, false);
         println!("✅ [CI OK] Fix complete.");
     }
 
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit(None, args.fast, false);
+        commands::run_audit(&covopt_core::config::AuditArgs { test: None, fast: args.fast, json: false, staged: false });
         println!("✅ [CI OK] Audit passed.");
     }
 

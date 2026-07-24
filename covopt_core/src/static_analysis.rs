@@ -590,7 +590,7 @@ impl<'ast> Visit<'ast> for AerospaceVisitor {
     }
 
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-        if let Some((_, path, _)) = &node.trait_
+        if let Some((path, _)) = &node.trait_
             && path.is_ident("Drop")
             && let syn::Type::Path(type_path) = &*node.self_ty
             && let Some(segment) = type_path.path.segments.last()

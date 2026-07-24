@@ -90,6 +90,14 @@ impl EncapsulationAdvisor {
             ));
         }
 
+
+        if visitor.simd_opportunities > 0 {
+            warnings.push(format!(
+                "[Rule 9: Portable SIMD Vectorization] Found {} numeric loops operating on slices. In Rust 1.90+, use `std::simd::Simd<T, N>` lanes to manually auto-vectorize this loop and dramatically multiply Instructions Per Cycle (IPC).",
+                visitor.simd_opportunities
+            ));
+        }
+
         // 3. Branch Prediction (Combining MCA data)
         if let Some(mca) = mca_report {
             if mca.ipc < covopt_param!("M_95_25", 1.5) && complexity > covopt_param!("M_95_45", 5) {
@@ -227,10 +235,16 @@ struct SeniorEngineerVisitor {
     mutex_in_hot_path: usize,
     io_in_hot_path: usize,
     manual_cas_loops: usize,
+    simd_opportunities: usize,
 }
 
 impl<'ast> Visit<'ast> for SeniorEngineerVisitor {
     fn visit_expr_for_loop(&mut self, i: &'ast ExprForLoop) {
+        let body_str = quote::quote!(#i).to_string();
+        if body_str.contains("[") && body_str.contains("]") && (body_str.contains("+=") || body_str.contains("*=") || body_str.contains("-=")) {
+            self.simd_opportunities += 1;
+        }
+
         self.in_loop = true;
         self.loop_depth += 1;
         syn::visit::visit_expr_for_loop(self, i);

@@ -32,7 +32,7 @@ pub fn run(src_dir: &str, trait_name: &str, method_name: &str, threshold: f64) {
         if let Ok(ast) = syn::parse_file(&content) {
             for item in ast.items {
                 if let Item::Impl(impl_item) = item
-                    && let Some((_, path, _)) = &impl_item.trait_
+                    && let Some((path, _)) = &impl_item.trait_
                     && path.segments.last().map(|s| s.ident.to_string())
                         == Some(trait_name.to_string())
                 {
