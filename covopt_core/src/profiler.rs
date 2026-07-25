@@ -28,19 +28,38 @@ pub fn run_profile(test_name: Option<&str>, bin_name: Option<&str>, tool: &str) 
 
 fn check_command_exists(cmd: &str, install_hint: &str) -> bool {
     let output = Command::new(cmd).arg("--version").output();
-    if output.is_err() {
-        eprintln!("\n[ERROR] Tool '{}' not found in PATH.", cmd);
-        eprintln!("Please install it via: {}", install_hint);
-        eprintln!("Wait, is it installed? Make sure ~/.cargo/bin is in your PATH.");
-        false
-    } else {
-        true
+    match output {
+        Ok(out) if out.status.success() => true,
+        _ => {
+            eprintln!("\n[ERROR] Tool '{}' not found in PATH.", cmd);
+            eprintln!("Please install it via: {}", install_hint);
+            eprintln!("Wait, is it installed? Make sure ~/.cargo/bin is in your PATH.");
+            false
+        }
     }
 }
 
+fn check_flamegraph_exists() -> bool {
+    if Command::new("flamegraph").arg("--version").output().is_ok() {
+        return true;
+    }
+    if Command::new("cargo")
+        .arg("flamegraph")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+    {
+        return true;
+    }
+    eprintln!("\n[ERROR] Tool 'flamegraph' not found in PATH.");
+    eprintln!("Please install it via: cargo install flamegraph");
+    eprintln!("Wait, is it installed? Make sure ~/.cargo/bin is in your PATH.");
+    false
+}
+
 fn run_flamegraph(test_name: Option<&str>, bin_name: Option<&str>) -> bool {
-    // Check if cargo-flamegraph is installed
-    if !check_command_exists("cargo-flamegraph", "cargo install cargo-flamegraph") {
+    // Check if flamegraph or cargo flamegraph is installed
+    if !check_flamegraph_exists() {
         return false;
     }
 

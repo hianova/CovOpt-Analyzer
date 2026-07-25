@@ -1,73 +1,61 @@
-#![allow(dead_code)]
 use covopt_macro::covopt_param;
-#[allow(unused_imports)]
+use std::fs;
+use std::hint::black_box;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::fs;
 
 // 1. Thread Physical Overbound Cache Thresh (Spawning thread inside a loop)
-fn trigger_thread_overbound() {
-    for _ in 0..covopt_param!("M_9_16", 1000) {
+pub fn trigger_thread_overbound() {
+    for _ in black_box(0..covopt_param!("M_9_16", 1000)) {
         thread::spawn(|| {
-            let _x = 1;
+            let x = black_box(1);
+            black_box(x);
         });
     }
 }
 
 // 2. Async Poisoning
-async fn trigger_async_poisoning() {
+pub async fn trigger_async_poisoning() {
     let m = Mutex::new(1);
     let _l = m.lock().unwrap();
     thread::sleep(Duration::from_millis(covopt_param!("M_20_40", 100)));
-    let _ = fs::read("test.txt");
+    let res = fs::read("test.txt");
+    let _ = black_box(res);
 }
 
 // 3. Hidden allocations in loop
-fn trigger_allocations() {
+pub fn trigger_allocations() {
     let s = "hello".to_string();
-    for _ in 0..covopt_param!("M_27_16", 100) {
-        let _ = s.clone();
-        let _ = format!("test");
-        let _ = vec![1, 2, 3];
+    for _ in black_box(0..covopt_param!("M_27_16", 100)) {
+        let cloned = s.clone();
+        let created = "test".to_string();
+        let v = vec![1, 2, 3];
+        black_box(cloned);
+        black_box(created);
+        black_box(v);
     }
 }
 
 // 4. God Function & Generic Bloat
-fn god_function<A, B, C, D>() {
-    if true {
-        if true {
-            if true {
-                if true {
-                    if true {
-                        if true {
-                            if true {
-                                if true {
-                                    if true {
-                                        if true {
-                                            println!("Complex");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+pub fn god_function() {
+    println!("Complex");
 }
 
-use std::sync::Mutex;
-fn trigger_lock_contention() {
+pub fn trigger_lock_contention() {
     let m = Mutex::new(0);
-    for i in 0..covopt_param!("M_62_16", 100) {
+    for i in black_box(0..covopt_param!("M_62_16", 100)) {
         let mut guard = m.lock().unwrap();
         *guard += i;
+        black_box(&guard);
     }
 }
 
-fn trigger_io_in_loop() {
-    for i in 0..covopt_param!("M_69_16", 10) {
-        println!("This IO call will completely destroy CPU pipeline performance: {}", i);
+pub fn trigger_io_in_loop() {
+    for i in black_box(0..covopt_param!("M_69_16", 10)) {
+        println!(
+            "This IO call will completely destroy CPU pipeline performance: {}",
+            i
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "covopt_core"
-version = "2.0.0-alpha.1"
+version = "2.0.0-beta.1"
 edition = "2024"
 description = "Core engine for CovOpt-Analyzer: AST complexity analysis, entropy rating, and LLVM profiling."
 license = "MIT"
@@ -13,7 +13,7 @@ authors = ["hianova <hianova@github.com>"]
 exclude = [".covopt/", ".covopt_backup/", "scratch/"]
 
 [dependencies]
-covopt-macro = { version = "2.0.0-alpha.1", path = "../covopt-macro" }
+covopt-macro = { version = "2.0.0-beta.1", path = "../covopt-macro" }
 spin = "0.12.2"
 tempfile = "3.17.1"
 rustc-demangle = "0.1.24"
@@ -24,7 +24,6 @@ proc-macro2 = { version = "1.0", features = ["span-locations"] }
 rand = "0.10.2"
 regex = "1.10.0"
 quote = "1.0"
-rayon = "1.10.0"
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 toml = "1.1.2"

@@ -1,6 +1,6 @@
 [package]
 name = "covopt_cli"
-version = "2.0.0-alpha.1"
+version = "2.0.0-beta.1"
 edition = "2024"
 description = "Command-line interface for CovOpt-Analyzer: automated time/space complexity auditing and AI agent auto-tuning."
 license = "MIT"
@@ -21,8 +21,8 @@ name = "cargo-covopt"
 path = "src/bin/cargo_covopt.rs"
 
 [dependencies]
-covopt_core = { version = "2.0.0-alpha.1", path = "../covopt_core" }
-covopt-macro = { version = "2.0.0-alpha.1", path = "../covopt-macro" }
+covopt_core = { version = "2.0.0-beta.1", path = "../covopt_core" }
+covopt-macro = { version = "2.0.0-beta.1", path = "../covopt-macro" }
 clap = { version = "4.5.31", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }

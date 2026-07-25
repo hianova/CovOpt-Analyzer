@@ -129,12 +129,12 @@ impl ConvergenceAnalyzer {
 
         for &comp in Complexity::all() {
             let (r2, c) = Self::calculate_r_squared(data, comp);
-            if r2 > max_r2 {
+            if r2 > max_r2 + covopt_param!("M_132_25", 0.001) {
                 max_r2 = r2;
                 best_complexity = comp;
                 best_c = c;
-            } else if max_r2 == expected_r2 && comp == expected {
-                best_c = c; // capture the c for the expected complexity if it's the best so far
+            } else if (r2 - expected_r2).abs() < covopt_param!("M_137_44", 0.001) && comp == expected {
+                best_c = c;
             }
         }
 

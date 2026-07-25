@@ -3,8 +3,24 @@ use std::path::Path;
 use std::process::Command;
 
 fn check_command_exists(cmd: &str, install_hint: &str) -> bool {
-    let output = Command::new(cmd).arg("--version").output();
-    if output.is_err() {
+    let status = if let Some(sub) = cmd.strip_prefix("cargo-") {
+        Command::new("cargo")
+            .arg(sub)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+            || Command::new(cmd)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success())
+    } else {
+        Command::new(cmd)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+    };
+
+    if !status {
         eprintln!("\n[ERROR] Tool '{}' not found.", cmd);
         eprintln!("Please install it via: {}", install_hint);
         false

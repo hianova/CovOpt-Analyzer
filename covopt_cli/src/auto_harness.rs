@@ -52,7 +52,7 @@ impl AutoHarness {
 
         let mut total_funcs = 0;
 
-        let fuzz_dir = Path::new("src/fuzz/fuzz_targets");
+        let fuzz_dir = Path::new("target/fuzz/fuzz_targets");
         if !fuzz_dir.exists() {
             fs::create_dir_all(fuzz_dir).context("Failed to create fuzz targets dir")?;
         }

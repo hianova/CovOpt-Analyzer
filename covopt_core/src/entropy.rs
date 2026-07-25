@@ -36,21 +36,22 @@ fn compute_cli_noise(details: &mut String) -> f64 {
     let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
     let output = Command::new("cargo")
         .args(["check", "--message-format=json"])
-        .output()
-        .expect("Failed to run cargo check");
+        .output();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut warning_count = 0;
 
-    for line in stdout.lines() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && let Some(msg) = v.get("message")
-            && let Some(level) = msg.get("level").and_then(|l| l.as_str())
-        {
-            if level == "warning" {
-                warning_count += 1;
-            } else if level == "error" || level == "error: internal compiler error" {
-                warning_count += covopt_param!("M_52_33", 5); // Heavily penalize errors/ICE
+    if let Ok(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(msg) = v.get("message")
+                && let Some(level) = msg.get("level").and_then(|l| l.as_str())
+            {
+                if level == "warning" {
+                    warning_count += 1;
+                } else if level == "error" || level == "error: internal compiler error" {
+                    warning_count += covopt_param!("M_52_33", 5); // Heavily penalize errors/ICE
+                }
             }
         }
     }

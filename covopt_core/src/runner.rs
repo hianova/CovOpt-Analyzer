@@ -141,6 +141,7 @@ pub fn compile_workspace_tests(
 
     let mut cmd = Command::new("cargo");
     cmd.env("RUSTFLAGS", "-C instrument-coverage")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1finstrument-coverage")
         .env(
             "LLVM_PROFILE_FILE",
             output_dir.join("default_%m_%p.profraw"),
@@ -205,7 +206,31 @@ pub fn compile_workspace_tests(
                 == Some(true)
             && let Some(exe) = v.get("executable").and_then(|e| e.as_str())
         {
-            executables.push(PathBuf::from(exe));
+            // Exclude proc-macro binaries (which fail with dyld error on macOS)
+            let is_proc_macro = v.get("target")
+                .and_then(|t| t.get("kind"))
+                .and_then(|k| k.as_array())
+                .is_some_and(|kinds| {
+                    kinds.iter().any(|k| {
+                        k.as_str().is_some_and(|s| s.contains("proc-macro") || s.contains("proc_macro"))
+                    })
+                })
+                || v.get("target")
+                    .and_then(|t| t.get("crate_types"))
+                    .and_then(|k| k.as_array())
+                    .is_some_and(|types| {
+                        types.iter().any(|t| {
+                            t.as_str().is_some_and(|s| s.contains("proc-macro") || s.contains("proc_macro"))
+                        })
+                    })
+                || exe.contains("covopt_macro")
+                || exe.contains("covopt-macro")
+                || exe.contains("proc_macro")
+                || exe.contains("proc-macro");
+
+            if !is_proc_macro {
+                executables.push(PathBuf::from(exe));
+            }
         }
     }
 
