@@ -11,6 +11,7 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
     // Step 1: Clean & Format (Fix)
     if config.pipeline.run_fix {
         println!("Step 1: Running Auto-Fix (cargo clippy --fix & magic numbers)...");
+        unsafe { std::env::set_var("COVOPT_NON_INTERACTIVE", "1"); }
         commands::run_fix(None);
         covopt_core::scanner::run_scan(None, true, false);
         println!("✅ [CI OK] Fix complete.");

@@ -216,19 +216,25 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         let _ = fs::copy(&file_path, &backup_path);
                     }
 
-                    // Smart import check: only insert if covopt_param is not already imported/re-exported
+                    // Smart import check: only insert if covopt_param is not already imported/re-exported or defined
                     let has_covopt_param_import = lines.iter().any(|l| {
                         let trimmed = l.trim();
-                        trimmed.starts_with("use ") && trimmed.contains("covopt_param")
+                        (trimmed.starts_with("use ") || trimmed.contains("macro_rules!"))
+                            && trimmed.contains("covopt_param")
                     });
 
                     if !has_covopt_param_import {
-                        let import_stmt = if fs::read_to_string("Cargo.toml").map(|c| c.contains("covopt_core")).unwrap_or(false) {
-                            "use covopt_core::covopt_param;".to_string()
-                        } else {
-                            "use covopt_macro::covopt_param;".to_string()
-                        };
-                        lines.insert(0, import_stmt);
+                        let cargo_toml = fs::read_to_string("Cargo.toml").unwrap_or_default();
+                        let is_no_std = lines.iter().any(|l| l.contains("#![no_std]"));
+
+                        if cargo_toml.contains("covopt-macro") {
+                            lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                        } else if cargo_toml.contains("covopt_core") {
+                            lines.insert(0, "use covopt_core::covopt_param;".to_string());
+                        } else if !is_no_std {
+                            lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                        }
+                        // If it's no_std and has no direct covopt dependency, skip inserting use statement
                     }
                     if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
                         eprintln!("Failed to write {}: {}", file_path.display(), e);

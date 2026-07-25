@@ -20,8 +20,8 @@ use syn::{Expr, ItemFn, parse_macro_input};
 pub fn covopt_param(input: TokenStream) -> TokenStream {
     let args_str = input.to_string();
     let parts: Vec<&str> = args_str.split(',').collect();
-    if parts.len() != 2 {
-        panic!("covopt_param! requires exactly 2 arguments: name and default value");
+    if parts.len() < 2 || parts.len() > 3 {
+        panic!("covopt_param! requires 2 or 3 arguments: name, default value, and optional range");
     }
 
     let name = parts[0].trim().trim_matches('"');
