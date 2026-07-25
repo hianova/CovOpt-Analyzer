@@ -159,10 +159,23 @@ pub fn compile_workspace_tests(
 
     let output = cmd
         .output()
-        .map_err(|e| format!("Failed to run cargo test: {}", e))?;
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("Operation not permitted") || err_msg.contains("Permission denied") {
+                format!("Failed to run cargo test: {}\n[Hint] Permission error detected. If running inside a sandboxed environment, ensure RUSTUP_HOME/CARGO_HOME is accessible or try --bypass-sandbox.", e)
+            } else {
+                format!("Failed to run cargo test: {}", e)
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Operation not permitted") || stderr.contains("Permission denied") || stderr.contains("os error 1") {
+            return Err(format!(
+                "Compilation failed: {}\n[Hint] Permission error detected while accessing toolchain files (e.g. ~/.rustup). If running inside an isolated sandbox, try using `--bypass-sandbox` or check permissions.",
+                stderr
+            ));
+        }
         return Err(format!("Compilation failed: {}", stderr));
     }
 

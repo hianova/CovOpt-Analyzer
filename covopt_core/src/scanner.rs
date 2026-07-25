@@ -153,18 +153,25 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                             println!("- {}", old_line.trim_start());
                             println!("+ {}", new_line.trim_start());
                             
-                            let mut apply = false;
-                            loop {
-                                use std::io::{self, Write};
-                                print!("Apply this fix? [y]es / [n]o / [q]uit: ");
-                                let _ = io::stdout().flush();
-                                let mut input = String::new();
-                                let _ = io::stdin().read_line(&mut input);
-                                match input.trim().to_lowercase().as_str() {
-                                    "y" | "yes" => { apply = true; break; }
-                                    "n" | "no" => { apply = false; break; }
-                                    "q" | "quit" => { abort_scan = true; break; }
-                                    _ => println!("Invalid input."),
+                            use std::io::IsTerminal;
+                            let is_non_interactive = !std::io::stdout().is_terminal()
+                                || std::env::var("COVOPT_NON_INTERACTIVE").is_ok()
+                                || std::env::var("CI").is_ok();
+                            
+                            let mut apply = is_non_interactive;
+                            if !is_non_interactive {
+                                loop {
+                                    use std::io::{self, Write};
+                                    print!("Apply this fix? [y]es / [n]o / [q]uit: ");
+                                    let _ = io::stdout().flush();
+                                    let mut input = String::new();
+                                    let _ = io::stdin().read_line(&mut input);
+                                    match input.trim().to_lowercase().as_str() {
+                                        "y" | "yes" => { apply = true; break; }
+                                        "n" | "no" => { apply = false; break; }
+                                        "q" | "quit" => { abort_scan = true; break; }
+                                        _ => println!("Invalid input."),
+                                    }
                                 }
                             }
                             
@@ -209,12 +216,19 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         let _ = fs::copy(&file_path, &backup_path);
                     }
 
-                    // Add `use covopt_macro::covopt_param;` at the top if not present
-                    if !lines
-                        .iter()
-                        .any(|l| l.contains("use covopt_macro::covopt_param;"))
-                    {
-                        lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                    // Smart import check: only insert if covopt_param is not already imported/re-exported
+                    let has_covopt_param_import = lines.iter().any(|l| {
+                        let trimmed = l.trim();
+                        trimmed.starts_with("use ") && trimmed.contains("covopt_param")
+                    });
+
+                    if !has_covopt_param_import {
+                        let import_stmt = if fs::read_to_string("Cargo.toml").map(|c| c.contains("covopt_core")).unwrap_or(false) {
+                            "use covopt_core::covopt_param;".to_string()
+                        } else {
+                            "use covopt_macro::covopt_param;".to_string()
+                        };
+                        lines.insert(0, import_stmt);
                     }
                     if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
                         eprintln!("Failed to write {}: {}", file_path.display(), e);

@@ -954,6 +954,7 @@ pub fn resolve_package_for_target(
 pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
     use walkdir::WalkDir;
     let mut results = Vec::new();
+
     for entry in WalkDir::new("src")
         .into_iter()
         .chain(WalkDir::new("tests"))
@@ -961,55 +962,80 @@ pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
     {
         if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
             && let Ok(file_content) = std::fs::read_to_string(entry.path())
-                && file_content.contains("#[covopt::test")
-                    && let Ok(ast) = syn::parse_file(&file_content) {
-                        for item in ast.items {
-                            if let syn::Item::Fn(item_fn) = item {
-                                let has_attr = item_fn.attrs.iter().any(|attr| {
-                                    attr.path().segments.last().map(|s| s.ident.to_string())
-                                        == Some("test".to_string())
-                                });
-                                if has_attr {
-                                    let mut expected = "O(1)".to_string();
-                                    let mut n_values = "1,100,1000".to_string();
-                                    for attr in item_fn.attrs {
-                                        if let syn::Meta::List(meta) = &attr.meta {
-                                            let tokens = quote::quote!(#meta).to_string();
-                                            if tokens.contains("expected")
-                                                && let Some(pos) = tokens.find("expected") {
-                                                    let rest = &tokens[pos..];
-                                                    if let Some(start) = rest.find('"')
-                                                        && let Some(end) =
-                                                            rest[start + 1..].find('"')
-                                                        {
-                                                            expected = rest
-                                                                [start + 1..start + 1 + end]
-                                                                .to_string();
-                                                        }
-                                                }
-                                            if tokens.contains("n_values")
-                                                && let Some(pos) = tokens.find("n_values") {
-                                                    let rest = &tokens[pos..];
-                                                    if let Some(start) = rest.find('"')
-                                                        && let Some(end) =
-                                                            rest[start + 1..].find('"')
-                                                        {
-                                                            n_values = rest
-                                                                [start + 1..start + 1 + end]
-                                                                .to_string();
-                                                        }
-                                                }
-                                        }
+            && file_content.contains("#[covopt::test")
+            && let Ok(ast) = syn::parse_file(&file_content)
+        {
+            for item in ast.items {
+                if let syn::Item::Fn(item_fn) = item {
+                    let has_attr = item_fn.attrs.iter().any(|attr| {
+                        attr.path().segments.last().map(|s| s.ident.to_string())
+                            == Some("test".to_string())
+                    });
+                    if has_attr {
+                        let mut expected = "O(1)".to_string();
+                        let mut n_values = "1,100,1000".to_string();
+                        for attr in &item_fn.attrs {
+                            if let syn::Meta::List(meta) = &attr.meta {
+                                let tokens = quote::quote!(#meta).to_string();
+                                if tokens.contains("expected")
+                                    && let Some(pos) = tokens.find("expected")
+                                {
+                                    let rest = &tokens[pos..];
+                                    if let Some(start) = rest.find('"')
+                                        && let Some(end) = rest[start + 1..].find('"')
+                                    {
+                                        expected = rest[start + 1..start + 1 + end].to_string();
                                     }
-                                    results.push((
-                                        item_fn.sig.ident.to_string(),
-                                        expected,
-                                        n_values,
-                                    ));
+                                }
+                                if tokens.contains("n_values")
+                                    && let Some(pos) = tokens.find("n_values")
+                                {
+                                    let rest = &tokens[pos..];
+                                    if let Some(start) = rest.find('"')
+                                        && let Some(end) = rest[start + 1..].find('"')
+                                    {
+                                        n_values = rest[start + 1..start + 1 + end].to_string();
+                                    }
                                 }
                             }
                         }
+                        results.push((item_fn.sig.ident.to_string(), expected, n_values));
                     }
+                }
+            }
+        }
     }
+
+    if results.is_empty() {
+        for entry in WalkDir::new("src")
+            .into_iter()
+            .chain(WalkDir::new("tests"))
+            .filter_map(|e| e.ok())
+        {
+            if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+                && let Ok(file_content) = std::fs::read_to_string(entry.path())
+                && (file_content.contains("#[test]") || file_content.contains("#[covopt_test]"))
+                && let Ok(ast) = syn::parse_file(&file_content)
+            {
+                for item in ast.items {
+                    if let syn::Item::Fn(item_fn) = item {
+                        let has_test_attr = item_fn.attrs.iter().any(|attr| {
+                            attr.path().is_ident("test")
+                                || attr.path().segments.last().map(|s| s.ident.to_string())
+                                    == Some("test".to_string())
+                        });
+                        if has_test_attr {
+                            results.push((
+                                item_fn.sig.ident.to_string(),
+                                "O(1)".to_string(),
+                                "1,100,1000".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     results
 }
