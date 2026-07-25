@@ -24,7 +24,6 @@ proc-macro2 = { version = "1.0", features = ["span-locations"] }
 rand = "0.10.2"
 regex = "1.10.0"
 quote = "1.0"
-rayon = "1.10.0"
 anyhow = "1.0.104"
 walkdir = "2.5.0"
 toml = "1.1.2"

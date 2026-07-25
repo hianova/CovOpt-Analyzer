@@ -38,6 +38,19 @@ Testing 123
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 # CovOpt Optimization & Tuning Rules (Google Antigravity)
 
 **Usage**: AI Agent instructions for performance verification and parameter tuning.

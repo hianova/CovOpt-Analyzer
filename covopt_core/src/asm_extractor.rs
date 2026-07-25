@@ -15,9 +15,30 @@ impl AsmExtractor {
 
     /// Triggers compilation to generate assembly
     pub fn compile_asm(&self) -> Result<(), String> {
-        let status = Command::new("cargo")
-            .args(["rustc", "--release", "--", "--emit=asm"])
-            .current_dir(&self.target_dir)
+        self.compile_asm_for_package(None)
+    }
+
+    /// Triggers compilation to generate assembly for a specific package or workspace
+    pub fn compile_asm_for_package(&self, pkg: Option<&str>) -> Result<(), String> {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("rustc").arg("--release");
+        if let Some(p) = pkg {
+            cmd.arg("-p").arg(p);
+        } else {
+            // Check if current Cargo.toml is a virtual workspace manifest
+            let manifest_path = self.target_dir.join("Cargo.toml");
+            if fs::read_to_string(&manifest_path).is_ok_and(|c| {
+                c.contains("[workspace]")
+                    && !c.contains("[package]")
+                    && c.contains("\"covopt_core\"")
+            }) {
+                cmd.arg("-p").arg("covopt_core");
+            }
+        }
+        cmd.args(["--", "--emit=asm"]);
+        cmd.current_dir(&self.target_dir);
+
+        let status = cmd
             .status()
             .map_err(|e| format!("Failed to run cargo rustc: {}", e))?;
 

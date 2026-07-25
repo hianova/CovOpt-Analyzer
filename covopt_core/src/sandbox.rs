@@ -1,3 +1,4 @@
+use covopt_macro::covopt_param;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -29,15 +30,14 @@ impl Sandbox {
         // 1. Try to get IPC via MCA if symbol is provided
         if let Some(sym) = symbol {
             let runner = crate::runner::CargoTestRunner::new("dummy", &self.target_dir, vec![]);
-            if let Ok(asm) = runner.compile_asm() {
-                if let Some(block) = runner.extract_asm_block(&asm, sym) {
+            if let Ok(asm) = runner.compile_asm()
+                && let Some(block) = runner.extract_asm_block(&asm, sym) {
                     let mca = McaRunner::new(None);
                     if let Ok(report) = mca.run(&block) {
                         ipc = Some(report.ipc);
                         cycles = Some(report.total_cycles);
                     }
                 }
-            }
         }
         
         // 2. Measure RSS via a quick cargo test run
@@ -47,13 +47,11 @@ impl Sandbox {
         if let Ok(output) = cmd.output() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             for line in stderr.lines() {
-                if line.contains("maximum resident set size") {
-                    if let Some(num_str) = line.split_whitespace().next() {
-                        if let Ok(rss) = num_str.parse::<u64>() {
+                if line.contains("maximum resident set size")
+                    && let Some(num_str) = line.split_whitespace().next()
+                        && let Ok(rss) = num_str.parse::<u64>() {
                             peak_rss = rss;
                         }
-                    }
-                }
             }
         }
         
@@ -109,14 +107,13 @@ impl Sandbox {
         
         let mut safe = true;
         
-        if let (Some(b_cycles), Some(c_cycles)) = (baseline.cycles, candidate.cycles) {
-            if c_cycles > (b_cycles as f64 * 1.05) as usize {
+        if let (Some(b_cycles), Some(c_cycles)) = (baseline.cycles, candidate.cycles)
+            && c_cycles > (b_cycles as f64 * covopt_param!("M_110_45", 1.05)) as usize {
                 println!("[Sandbox] ❌ Rejecting fix due to Cycle count regression.");
                 safe = false;
             }
-        }
         
-        if candidate.peak_rss > (baseline.peak_rss as f64 * 1.05) as u64 {
+        if candidate.peak_rss > (baseline.peak_rss as f64 * covopt_param!("M_115_60", 1.05)) as u64 {
             println!("[Sandbox] ❌ Rejecting fix due to Memory (RSS) regression.");
             safe = false;
         }

@@ -8,18 +8,27 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
     println!("🚀 Starting CovOpt-Analyzer Unified Auto-Pilot (CI)");
     println!("===================================================");
 
+    if let Some(ref base) = args.base {
+        println!("▶️ Base branch specified: {}. Restricting analysis to modified files.", base);
+    }
+
     // Step 1: Clean & Format (Fix)
     if config.pipeline.run_fix {
         println!("Step 1: Running Auto-Fix (cargo clippy --fix & magic numbers)...");
         unsafe { std::env::set_var("COVOPT_NON_INTERACTIVE", "1"); }
-        commands::run_fix(None);
-        covopt_core::scanner::run_scan(None, true, false);
+        commands::run_fix(args.base.clone());
+        covopt_core::scanner::run_scan(args.base.clone(), true, false);
         println!("✅ [CI OK] Fix complete.");
     }
 
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit(&covopt_core::config::AuditArgs { test: None, fast: args.fast, json: false, staged: false });
+        commands::run_audit(&covopt_core::config::AuditArgs {
+            test: None,
+            fast: args.fast,
+            json: false,
+            staged: args.base.is_some(),
+        });
         println!("✅ [CI OK] Audit passed.");
     }
 

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use covopt_core::analyzer::Complexity;
 
 fn parse_complexity(s: &str) -> Option<Complexity> {
-    match s.to_uppercase().as_str() {
+    let clean = s.to_uppercase().replace(' ', "");
+    match clean.as_str() {
         "O1" | "O(1)" => Some(Complexity::O1),
         "OLOGN" | "O(LOGN)" => Some(Complexity::OLogN),
         "ON" | "O(N)" => Some(Complexity::ON),
@@ -183,9 +184,9 @@ pub fn run_analysis(
             Err(e) => {
                 wlog!(log, "[ERROR] Failed to run coverage for N={}: {}", n, e);
                 if compact {
-                    wlog!(log, "\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
-                    wlog!(log, "{}", log.buffer);
-                    wlog!(log, "========================================\n");
+                    eprintln!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+                    eprintln!("{}", log.buffer);
+                    eprintln!("========================================\n");
                 }
                 return false;
             }
@@ -710,9 +711,9 @@ pub fn run_analysis(
         }
     } else {
         if compact {
-            wlog!(log, "\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
-            wlog!(log, "{}", log.buffer);
-            wlog!(log, "========================================\n");
+            eprintln!("\n=== DETAILED ANALYSIS LOG (FAILURE) ===");
+            eprintln!("{}", log.buffer);
+            eprintln!("========================================\n");
         }
     }
 
@@ -781,8 +782,12 @@ pub fn init_config(args: crate::InitArgs) {
             "CovOpt-Analyzer: .covopt.toml already exists. Skipping config creation, but will ensure rules are injected."
         );
     } else {
+        use std::io::IsTerminal;
         use std::io::Write;
-        let require_aerospace = if args.yes {
+        let is_non_interactive = !std::io::stdout().is_terminal()
+            || std::env::var("COVOPT_NON_INTERACTIVE").is_ok()
+            || std::env::var("CI").is_ok();
+        let require_aerospace = if args.yes || is_non_interactive {
             false
         } else {
             print!("Enable Aerospace Grade checks? [y/N]: ");
@@ -935,12 +940,10 @@ pub fn run_fix(path: Option<String>) {
     // Collect target files (all .rs files in path or src/)
     let search_path = path.clone().unwrap_or_else(|| "src/".to_string());
     let mut target_files = Vec::new();
-    for entry in walkdir::WalkDir::new(&search_path) {
-        if let Ok(e) = entry {
-            let p = e.path();
-            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("rs") {
-                target_files.push(p.to_path_buf());
-            }
+    for e in walkdir::WalkDir::new(&search_path).into_iter().flatten() {
+        let p = e.path();
+        if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("rs") {
+            target_files.push(p.to_path_buf());
         }
     }
     
@@ -1201,18 +1204,41 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
     if args.path == "-" {
         use std::io::BufRead;
         let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            if let Ok(file_path) = line {
-                let trimmed = file_path.trim();
-                if !trimmed.is_empty() {
-                    let p = PathBuf::from(trimmed);
-                    if p.extension().and_then(|s| s.to_str()) == Some("rs") && p.exists() {
-                        files_to_analyze.push(p);
-                    }
+        for file_path in stdin.lock().lines().map_while(Result::ok) {
+            let trimmed = file_path.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if p.extension().and_then(|s| s.to_str()) == Some("rs") && p.exists() {
+                    files_to_analyze.push(p);
                 }
             }
         }
     } else {
+        fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+
+                    if file_name.starts_with('.')
+                        || file_name == "target"
+                        || file_name == "tests"
+                        || file_name == "benches"
+                    {
+                        continue;
+                    }
+
+                    if path.is_dir() {
+                        collect_rs_files(&path, files);
+                    } else if path.is_file()
+                        && path.extension().and_then(|s| s.to_str()) == Some("rs")
+                    {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+
         let target_path = Path::new(&args.path);
         if target_path.is_file() {
             if target_path.extension().and_then(|s| s.to_str()) == Some("rs") {
@@ -1221,33 +1247,21 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
                 return Err("Target must be a Rust file or a directory".to_string());
             }
         } else if target_path.is_dir() {
-            fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-
-                        if file_name.starts_with('.')
-                            || file_name == "target"
-                            || file_name == "tests"
-                            || file_name == "benches"
-                        {
-                            continue;
-                        }
-
-                        if path.is_dir() {
-                            collect_rs_files(&path, files);
-                        } else if path.is_file()
-                            && path.extension().and_then(|s| s.to_str()) == Some("rs")
-                        {
-                            files.push(path);
-                        }
+            collect_rs_files(target_path, &mut files_to_analyze);
+        } else {
+            // Fallback for virtual workspace root where root "src/" does not exist:
+            // scan member crate src/ directories (e.g. covopt_core/src, covopt_cli/src, etc.)
+            if let Ok(entries) = fs::read_dir(".") {
+                for entry in entries.flatten() {
+                    let crate_src = entry.path().join("src");
+                    if crate_src.is_dir() {
+                        collect_rs_files(&crate_src, &mut files_to_analyze);
                     }
                 }
             }
-            collect_rs_files(target_path, &mut files_to_analyze);
-        } else {
-            return Err("Target path does not exist".to_string());
+            if files_to_analyze.is_empty() {
+                return Err("Target path does not exist".to_string());
+            }
         }
     }
 
@@ -1309,11 +1323,6 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
 
         for item in ast.items {
             if let syn::Item::Fn(item_fn) = item {
-                // Skip public functions (often just routing or facades) from analysis
-                if matches!(item_fn.vis, syn::Visibility::Public(_)) {
-                    continue;
-                }
-
                 // Exclude test and bench functions
                 let mut is_test_or_bench = false;
                 for attr in &item_fn.attrs {

@@ -118,7 +118,13 @@ fn main() {
                 let run_all = !args.mutate && !args.fuzz && !args.sanitize;
 
                 if args.mutate || run_all {
-                    if std::process::Command::new("cargo").arg("mutants").arg("--version").output().is_err() {
+                    let mutants_installed = std::process::Command::new("cargo")
+                        .arg("mutants")
+                        .arg("--version")
+                        .output()
+                        .is_ok_and(|out| out.status.success());
+
+                    if !mutants_installed {
                         if !args.fast {
                             eprintln!("Error: cargo-mutants is not installed.");
                             std::process::exit(1);
@@ -136,7 +142,13 @@ fn main() {
                     success = false;
                 }
                 if args.fuzz || run_all {
-                    if std::process::Command::new("cargo").arg("fuzz").arg("--version").output().is_err() {
+                    let fuzz_installed = std::process::Command::new("cargo")
+                        .arg("fuzz")
+                        .arg("--version")
+                        .output()
+                        .is_ok_and(|out| out.status.success());
+
+                    if !fuzz_installed {
                         if !args.fast {
                             eprintln!("Error: cargo-fuzz is not installed.");
                             std::process::exit(1);

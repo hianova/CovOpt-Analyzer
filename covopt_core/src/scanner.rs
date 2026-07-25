@@ -273,17 +273,29 @@ pub fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                // Ignore common non-source directories
+                // Ignore common non-source directories and proc-macro crates
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let is_proc_macro_dir = file_name == "covopt-macro"
+                    || file_name == "covopt_macro"
+                    || file_name.contains("proc-macro")
+                    || file_name.contains("proc_macro");
+
                 if file_name != "target"
                     && file_name != ".git"
                     && file_name != ".agents"
+                    && !is_proc_macro_dir
                     && !file_name.starts_with('.')
                 {
                     collect_rs_files(&path, files);
                 }
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-                files.push(path);
+                let is_in_proc_macro = path.components().any(|c| {
+                    let s = c.as_os_str().to_string_lossy();
+                    s == "covopt-macro" || s == "covopt_macro" || s.contains("proc-macro") || s.contains("proc_macro")
+                });
+                if !is_in_proc_macro {
+                    files.push(path);
+                }
             }
         }
     }
