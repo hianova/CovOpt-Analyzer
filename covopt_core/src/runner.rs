@@ -132,6 +132,7 @@ impl CoverageRunner {
 
 pub fn check_workspace() -> Result<(), String> {
     let mut cmd = Command::new("cargo");
+    cmd.env("RUSTFLAGS", "--cap-lints warn");
     cmd.args(["check", "--workspace", "--all-targets", "--message-format=json"]);
 
     if !crate::config::should_color() {
@@ -144,7 +145,17 @@ pub fn check_workspace() -> Result<(), String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Workspace compilation failed.\n{}", stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut rustc_errors = String::new();
+        for line in stdout.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(msg) = v.get("message").and_then(|m| m.get("rendered")).and_then(|r| r.as_str()) {
+                    rustc_errors.push_str(msg);
+                    rustc_errors.push('\n');
+                }
+            }
+        }
+        return Err(format!("Workspace compilation failed.\n{}\n{}", stderr, rustc_errors));
     }
 
     Ok(())
@@ -160,8 +171,8 @@ pub fn compile_workspace_tests(
     }
 
     let mut cmd = Command::new("cargo");
-    cmd.env("RUSTFLAGS", "-C instrument-coverage")
-        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1finstrument-coverage")
+    cmd.env("RUSTFLAGS", "-C instrument-coverage --cap-lints warn")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1finstrument-coverage\x1f--cap-lints\x1fwarn")
         .env(
             "LLVM_PROFILE_FILE",
             output_dir.join("default_%m_%p.profraw"),
@@ -191,13 +202,23 @@ pub fn compile_workspace_tests(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut rustc_errors = String::new();
+        for line in stdout.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(msg) = v.get("message").and_then(|m| m.get("rendered")).and_then(|r| r.as_str()) {
+                    rustc_errors.push_str(msg);
+                    rustc_errors.push('\n');
+                }
+            }
+        }
         if stderr.contains("Operation not permitted") || stderr.contains("Permission denied") || stderr.contains("os error 1") {
             return Err(format!(
-                "Compilation failed: {}\n[Hint] Permission error detected while accessing toolchain files (e.g. ~/.rustup). If running inside an isolated sandbox, try using `--bypass-sandbox` or check permissions.",
-                stderr
+                "Compilation failed: {}\n{}\n[Hint] Permission error detected while accessing toolchain files (e.g. ~/.rustup). If running inside an isolated sandbox, try using `--bypass-sandbox` or check permissions.",
+                stderr, rustc_errors
             ));
         }
-        return Err(format!("Compilation failed: {}", stderr));
+        return Err(format!("Compilation failed: {}\n{}", stderr, rustc_errors));
     }
 
     let mut executables = Vec::new();

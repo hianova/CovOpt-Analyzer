@@ -184,11 +184,21 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                             let lib_rs = dir.join("src").join("lib.rs");
                             let main_rs = dir.join("src").join("main.rs");
                             let mut crate_has_no_std = false;
-                            for root_file in &[lib_rs, main_rs] {
-                                if let Ok(root_content) = fs::read_to_string(root_file) {
-                                    if root_content.contains("#![no_std]") {
-                                        crate_has_no_std = true;
-                                        break;
+                            
+                            // Check if it's a proc-macro crate (which we should also skip)
+                            if let Ok(toml_content) = fs::read_to_string(&cargo_toml) {
+                                if toml_content.contains("proc-macro = true") {
+                                    crate_has_no_std = true;
+                                }
+                            }
+
+                            if !crate_has_no_std {
+                                for root_file in &[lib_rs, main_rs] {
+                                    if let Ok(root_content) = fs::read_to_string(root_file) {
+                                        if root_content.contains("#![no_std]") {
+                                            crate_has_no_std = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }

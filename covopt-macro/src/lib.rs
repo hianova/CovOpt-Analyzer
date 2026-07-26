@@ -67,11 +67,19 @@ pub fn covopt_param(input: TokenStream) -> TokenStream {
     let default_expr: Expr =
         syn::parse_str(default_val_str).expect("Failed to parse default value");
 
-    let expanded = quote! {
-        std::env::var(#env_name)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(#default_expr)
+    let use_std = std::env::var("CARGO_FEATURE_STD").is_ok();
+
+    let expanded = if use_std {
+        quote! {
+            std::env::var(#env_name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(#default_expr)
+        }
+    } else {
+        quote! {
+            #default_expr
+        }
     };
 
     TokenStream::from(expanded)
@@ -112,19 +120,35 @@ pub fn covopt_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let orig_body = &input_fn.block;
     let sig_inputs = &input_fn.sig.inputs;
 
-    let expanded = quote! {
-        #[test]
-        #fn_vis fn #fn_name() {
-            let n: usize = std::env::var("COVOPT_N")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or_else(|| covopt_macro::covopt_param!("COVOPT_TEST_DEFAULT_N", 10));
+    let use_std = std::env::var("CARGO_FEATURE_STD").is_ok();
 
-            let mut __covopt_inner = |#sig_inputs| {
-                #orig_body
-            };
+    let expanded = if use_std {
+        quote! {
+            #[test]
+            #fn_vis fn #fn_name() {
+                let n: usize = std::env::var("COVOPT_N")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| covopt_macro::covopt_param!("COVOPT_TEST_DEFAULT_N", 10));
 
-            __covopt_inner(n);
+                let mut __covopt_inner = |#sig_inputs| {
+                    #orig_body
+                };
+
+                __covopt_inner(n);
+            }
+        }
+    } else {
+        quote! {
+            #[test]
+            #fn_vis fn #fn_name() {
+                let n: usize = covopt_macro::covopt_param!("COVOPT_TEST_DEFAULT_N", 10);
+                let mut __covopt_inner = |#sig_inputs| {
+                    #orig_body
+                };
+
+                __covopt_inner(n);
+            }
         }
     };
 
