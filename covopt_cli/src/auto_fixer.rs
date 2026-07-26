@@ -148,21 +148,6 @@ mod tests {
         scanner.visit_file(&syntax_tree);
         assert_eq!(scanner.targets.len(), 0);
     }
-    #[test]
-    fn test_auto_fixer_preserves_inner_attributes() {
-        let lines: Vec<String> = vec![
-            "//! Test module doc".to_string(),
-            "#![allow(dead_code)]".to_string(),
-            "fn foo() {}".to_string(),
-        ];
-        let idx = covopt_core::scanner::find_import_insert_index(&lines);
-        assert_eq!(idx, 2);
-        let mut lines_mut = lines.clone();
-        lines_mut.insert(idx, "use core::hint::black_box;".to_string());
-        assert_eq!(lines_mut[0], "//! Test module doc");
-        assert_eq!(lines_mut[1], "#![allow(dead_code)]");
-        assert_eq!(lines_mut[2], "use core::hint::black_box;");
-        assert_eq!(lines_mut[3], "fn foo() {}");
-    }
+
 }
 

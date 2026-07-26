@@ -958,9 +958,13 @@ pub fn run_fix(path: Option<String>) {
         if !covopt_core::config::should_color() {
             args.push("--color=never");
         }
+        args.push("--");
+        args.push("-A");
+        args.push("unused_imports");
+        
         let path_str = path.clone().unwrap_or_default();
         if path.is_some() {
-            args.push("--");
+            // cargo clippy actually doesn't take paths directly, but if this was here we append it
             args.push(&path_str);
         }
         

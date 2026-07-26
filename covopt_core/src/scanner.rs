@@ -117,60 +117,6 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
     }
 }
 
-pub fn find_import_insert_index(lines: &[String]) -> usize {
-    let mut i = 0;
-    let mut in_block_comment = false;
-    let mut in_inner_attr = false;
-
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-
-        if in_block_comment {
-            if trimmed.contains("*/") {
-                in_block_comment = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_inner_attr {
-            if trimmed.contains(']') {
-                in_inner_attr = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if trimmed.is_empty() {
-            i += 1;
-            continue;
-        }
-
-        if trimmed.starts_with("//!") || trimmed.starts_with("//") {
-            i += 1;
-            continue;
-        }
-
-        if trimmed.starts_with("/*") {
-            if !trimmed.contains("*/") {
-                in_block_comment = true;
-            }
-            i += 1;
-            continue;
-        }
-
-        if trimmed.starts_with("#![") {
-            if !trimmed.contains(']') {
-                in_inner_attr = true;
-            }
-            i += 1;
-            continue;
-        }
-
-        break;
-    }
-    i
-}
 
 pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let start_dir = path.unwrap_or_else(|| ".".to_string());
@@ -222,9 +168,13 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let macro_path = config.and_then(|c| c.macro_path).unwrap_or_else(|| "covopt_macro::covopt_param".to_string());
 
     for file_path in files_to_scan {
-        if let Ok(content) = fs::read_to_string(&file_path)
-            && let Ok(syntax_tree) = syn::parse_file(&content)
-        {
+        if let Ok(content) = fs::read_to_string(&file_path) {
+            let is_no_std = content.contains("#![no_std]");
+            if is_no_std && macro_path == "covopt_macro::covopt_param" {
+                println!("  [Skip] {} (no_std detected, requires custom macro_path)", file_path.display());
+                continue;
+            }
+            if let Ok(syntax_tree) = syn::parse_file(&content) {
             let mut scanner = MagicNumberScanner {
                 file_path: file_path.to_string_lossy().to_string(),
                 found_magics: Vec::new(),
@@ -336,6 +286,7 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                     break;
                 }
             }
+            }
         }
     }
 
@@ -442,30 +393,7 @@ mod tests {
         assert!(found_vals.contains(&"888"), "Regular fn body magic number 888 should be found");
     }
 
-    #[test]
-    fn test_find_import_insert_index_preserves_inner_attributes() {
-        let lines: Vec<String> = vec![
-            "//! Module level documentation comment".to_string(),
-            "//! Second line of module doc".to_string(),
-            "#![no_std]".to_string(),
-            "#![allow(unused_variables)]".to_string(),
-            "".to_string(),
-            "use std::collections::HashMap;".to_string(),
-            "fn main() {}".to_string(),
-        ];
 
-        let idx = find_import_insert_index(&lines);
-        // Index should be 5 (after doc comments, inner attributes, and empty line, pointing right before existing use statement)
-        assert_eq!(idx, 5);
-
-        let mut lines_mut = lines.clone();
-        lines_mut.insert(idx, "use covopt_macro::covopt_param;".to_string());
-
-        // Verify that inner attributes stay at lines 2 and 3 (0-indexed), above the inserted use statement
-        assert_eq!(lines_mut[2], "#![no_std]");
-        assert_eq!(lines_mut[3], "#![allow(unused_variables)]");
-        assert_eq!(lines_mut[5], "use covopt_macro::covopt_param;");
-    }
 }
 
 
