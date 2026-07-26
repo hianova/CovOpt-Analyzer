@@ -1,48 +1,53 @@
-# BRIEFING — 2026-07-25T02:11:05Z
+# BRIEFING — 2026-07-26T15:36:44+08:00
 
 ## Mission
-Review and stress-test code changes for Milestone 1 (CLI & Core Engine Robustness) delivered by Worker 1.
+Review Milestone 1 (R1 & R2) implementation by Worker 1 and issue a verdict (PASS/FAIL / APPROVE/REQUEST_CHANGES).
 
 ## 🔒 My Identity
-- Archetype: reviewer_critic
+- Archetype: reviewer & critic
 - Roles: reviewer, critic
 - Working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1
-- Original parent: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Milestone: Milestone 1 - CLI & Core Engine Robustness
+- Original parent: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Milestone: Milestone 1 (R1 & R2)
 - Instance: 1 of 1
 
 ## 🔒 Key Constraints
-- Review-only — do NOT modify implementation code (report findings in handoff)
-- Check for integrity violations (hardcoded tests, facades, shortcuts, self-certifying work)
-- Always prefix shell commands with `rtk`
+- Review-only — do NOT modify implementation code
+- Always use `rtk` prefix for shell commands
+- Check for integrity violations (hardcoded test outputs, dummy implementations, shortcuts, self-certifying work)
 
 ## Current Parent
-- Conversation ID: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Updated: 2026-07-25T02:11:05Z
+- Conversation ID: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Updated: 2026-07-26T15:36:44+08:00
 
 ## Review Scope
-- **Files to review**: `covopt_core`, `covopt_cli`, `covopt-macro`
-- **Worker Handoff**: `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_worker_m1/handoff.md`
-- **Context**: `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/context.md`
-- **Review criteria**: Correctness, clippy cleanliness, test pass rate, integrity, lock-free constraints, parameter tuning macro usage.
+- **Files to review**: 
+  - Worker 1 Handoff: `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_worker_m1/handoff.md`
+  - `covopt_core/src/scanner.rs`
+  - `covopt_cli/src/auto_fixer.rs`
+- **Interface contracts**: R1 (const context auto-fix E0015) & R2 (preserve inner attributes and module comments)
+- **Review criteria**: Correctness, completeness, anti-DCE/macro/Clippy cleanliness rules, edge cases, integrity checks.
 
 ## Review Checklist
-- **Items reviewed**: All modified files in `covopt_core`, `covopt_cli`, `covopt-macro`
-- **Verdict**: PASS (APPROVE)
-- **Unverified claims**: 0 remaining (all claims independently verified)
+- **Items reviewed**:
+  - `covopt_core/src/scanner.rs` (`MagicNumberScanner`, `find_import_insert_index`, unit tests)
+  - `covopt_cli/src/auto_fixer.rs` (`AutoFixer::run`, unit tests)
+  - `rtk cargo check --workspace` output
+  - `rtk cargo test --workspace` output
+  - `rtk cargo clippy --workspace` output
+- **Verdict**: PASS / APPROVE
+- **Unverified claims**: None. All claims verified independently.
 
 ## Attack Surface
-- **Hypotheses tested**: Clippy cleanliness, build error checks, workspace test suite execution, CLI non-interactive execution, proc-macro isolation, macOS dyld runner fix.
-- **Vulnerabilities found**: 0 vulnerabilities found.
+- **Hypotheses tested**: Skip logic for const fn, statics, const items, enum discriminants, pattern match arms, inline const blocks, attributes, array lengths, const generic params. Line insertion logic past module doc comments (`//!`), single-line/multi-line block comments (`/* ... */`), and inner attributes (`#![...]`).
+- **Vulnerabilities found**: None.
 - **Untested angles**: None.
 
 ## Key Decisions Made
-- Confirmed zero clippy warnings with `rtk cargo clippy --workspace --all-targets -- -D warnings`.
-- Confirmed 21/21 tests pass with `rtk cargo test --workspace`.
-- Confirmed zero `#![allow(...)]` or `#[allow(...)]` attributes across the repository.
-- Issued verdict PASS in `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/handoff.md`.
+- Confirmed full compliance and zero integrity violations for R1 & R2.
+- Issued verdict: PASS / APPROVE.
 
 ## Artifact Index
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/ORIGINAL_REQUEST.md` — Original request transcript
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/BRIEFING.md` — Briefing working memory
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/handoff.md` — Reviewer 1 Handoff Report (PASS)
+- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/ORIGINAL_REQUEST.md` — Original request log
+- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/BRIEFING.md` — State briefing
+- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_1/handoff.md` — Final review handoff report

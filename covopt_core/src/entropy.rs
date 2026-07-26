@@ -32,33 +32,80 @@ pub fn calculate_entropy_score(config: &TargetConfig, compact: bool) -> EntropyR
     }
 }
 
-fn compute_cli_noise(details: &mut String) -> f64 {
-    let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
-    let output = Command::new("cargo")
-        .args(["check", "--message-format=json"])
-        .output();
+fn is_ignored_path(file_name: &str) -> bool {
+    let path = std::path::Path::new(file_name);
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s == "tests" || s == "examples"
+    })
+}
 
+fn is_diagnostic_ignored(msg: &serde_json::Value) -> bool {
+    if let Some(spans) = msg.get("spans").and_then(|s| s.as_array()) {
+        if spans.is_empty() {
+            return false;
+        }
+        let primary_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.get("is_primary").and_then(|b| b.as_bool()).unwrap_or(false))
+            .collect();
+
+        if !primary_spans.is_empty() {
+            primary_spans.iter().any(|s| {
+                s.get("file_name")
+                    .and_then(|f| f.as_str())
+                    .is_some_and(is_ignored_path)
+            })
+        } else {
+            spans.iter().any(|s| {
+                s.get("file_name")
+                    .and_then(|f| f.as_str())
+                    .is_some_and(is_ignored_path)
+            })
+        }
+    } else {
+        false
+    }
+}
+
+pub fn parse_cli_noise_from_json(stdout: &str) -> (usize, f64) {
     let mut warning_count = 0;
 
-    if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-                && let Some(msg) = v.get("message")
-                && let Some(level) = msg.get("level").and_then(|l| l.as_str())
-            {
-                if level == "warning" {
-                    warning_count += 1;
-                } else if level == "error" || level == "error: internal compiler error" {
-                    warning_count += covopt_param!("M_52_33", 5); // Heavily penalize errors/ICE
-                }
+    for line in stdout.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(msg) = v.get("message")
+            && let Some(level) = msg.get("level").and_then(|l| l.as_str())
+        {
+            if is_diagnostic_ignored(msg) {
+                continue;
+            }
+
+            if level == "warning" {
+                warning_count += 1;
+            } else if level == "error" || level == "error: internal compiler error" {
+                warning_count += covopt_param!("M_52_33", 5);
             }
         }
     }
 
-    // Each warning adds 2 points to entropy, up to 30.
     let score =
         (warning_count as f64 * covopt_param!("M_58_40", 2.0)).min(covopt_param!("M_58_49", 30.0));
+    (warning_count, score)
+}
+
+fn compute_cli_noise(details: &mut String) -> f64 {
+    let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
+    let output = Command::new("cargo")
+        .args(["check", "--workspace", "--all-targets", "--message-format=json"])
+        .output();
+
+    let (warning_count, score) = if let Ok(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_cli_noise_from_json(&stdout)
+    } else {
+        (0, 0.0)
+    };
+
     let _ = writeln!(
         details,
         "     Found {} warnings. CLI Noise Score: {:.1}/30.0",
@@ -231,3 +278,30 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     );
     score
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cli_noise_filters_tests_and_examples() {
+        let json_data = r#"{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"tests/integration_test.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"examples/demo.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"src/lib.rs","is_primary":true}]}}"#;
+
+        let (count, score) = parse_cli_noise_from_json(json_data);
+        assert_eq!(count, 1, "Only warning in src/lib.rs should be counted");
+        assert!((score - 2.0).abs() < f64::EPSILON, "Score should be 2.0 for 1 warning");
+    }
+
+    #[test]
+    fn test_parse_cli_noise_all_ignored_yields_zero() {
+        let json_data = r#"{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"tests/foo.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"examples/bar.rs","is_primary":true}]}}"#;
+
+        let (count, score) = parse_cli_noise_from_json(json_data);
+        assert_eq!(count, 0, "Warnings in tests/ and examples/ should be excluded");
+        assert!((score - 0.0).abs() < f64::EPSILON, "Score should be 0.0 when all diagnostics are ignored");
+    }
+}
+

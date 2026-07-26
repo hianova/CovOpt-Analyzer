@@ -21,6 +21,11 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
         println!("✅ [CI OK] Fix complete.");
     }
 
+    if let Err(e) = covopt_core::runner::check_workspace() {
+        eprintln!("❌ [CI Failed] Workspace compilation failed:\n{}", e);
+        std::process::exit(1);
+    }
+
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
         commands::run_audit(&covopt_core::config::AuditArgs {

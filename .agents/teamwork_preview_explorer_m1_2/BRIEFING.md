@@ -1,49 +1,37 @@
-# BRIEFING — 2026-07-25T02:01:30Z
+# BRIEFING — 2026-07-26T07:32:30Z
 
 ## Mission
-Investigate benchmark suite readiness and rule conformance for CovOpt-Analyzer v2.0 upgrade (Milestone 2).
+Investigate R3 (Strict Workspace Audit) in CovOpt-Analyzer: analyze `covopt ci` / `covopt audit` handling of `cargo check --workspace` and determine exact changes so `covopt ci` fails on workspace compilation errors.
 
 ## 🔒 My Identity
-- Archetype: Explorer
-- Roles: Read-only investigation, codebase rule & benchmark auditor
+- Archetype: explorer
+- Roles: Explorer 2 (teamwork_preview_explorer)
 - Working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2
-- Original parent: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Milestone: Milestone 2: Comprehensive Benchmark Suite & Rule Conformance
+- Original parent: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Milestone: Milestone 2: R3
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement fixes in source code directly
-- Always prefix shell commands with `rtk`
-- Must produce detailed handoff report in `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2/handoff.md`
+- Read-only investigation — do NOT implement
+- Prefix shell commands with `rtk`
+- Prefer codebase-memory-mcp / search tools for code discovery
+- Send message to parent when analysis is ready
 
 ## Current Parent
-- Conversation ID: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Updated: 2026-07-25T02:01:30Z
+- Conversation ID: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Updated: 2026-07-26T07:32:30Z
 
 ## Investigation State
-- **Explored paths**:
-  - `tests/` (`dummy_test.rs`, `no_macro_test.rs`, `ruinsos_scheduler.rs`, `spin_deadlock.rs`, `uaf_thread_exit.rs`)
-  - `covopt-macro/src/lib.rs` (`covopt_param!`, `#[covopt_test]` proc macro implementations)
-  - `covopt_core/src/` (`analyzer.rs`, `static_analysis.rs`, `dummy_heuristics.rs`, `mca.rs`, `runner.rs`)
-  - `covopt_cli/src/` (`commands.rs`, `ci.rs`, `main.rs`, `auto_fixer.rs`)
-  - `.agents/AGENTS.md` and `.agents/orchestrator/plan.md`
-- **Key findings**:
-  1. Workspace test runner gap: Top-level `tests/` integration tests are not included in root `Cargo.toml` workspace members and are skipped by `cargo test --workspace`.
-  2. Missing benchmark fixtures: Fixtures for $O(\log N)$, $O(N \log N)$, and $O(N^2)$ models are missing (only $O(1)$ and $O(N)$ exist).
-  3. Static metadata extraction bugs: `find_all_covopt_tests` only searches for string `#[covopt::test`, missing `#[covopt_test]` usages and falling back to assigning `O(1)` to all tests. Comma splitting in `find_covopt_test_metadata` breaks array `n_values` like `[1000, 5000, 10000]`.
-  4. Proc-Macro Crate Audit Failure: `covopt audit` fails when trying to execute test binary built for `covopt-macro` (`dyld: Library not loaded: @rpath/libstd... Reason: no LC_RPATH's found`), because proc-macro crates produce dynamic dylibs rather than standalone test executables.
-  5. Rule Conformance violations:
-     - Zero-Entropy Tuning: Hardcoded defaults in `covopt-macro` (`10`), `tests/no_macro_test.rs`, `spin_deadlock.rs`, and static analysis fallbacks.
-     - Anti-DCE: `tests/dummy_test.rs` and `no_macro_test.rs` loops lack `black_box` wrapping on loop variables `i`.
-     - Strict Clippy Cleanliness: 17 clippy warnings in `dummy_heuristics.rs` and `commands.rs`, plus `#![allow(dead_code)]` and `#[allow(unused_imports)]` in `dummy_heuristics.rs`.
-- **Unexplored areas**: None (all workspace targets and rules fully audited).
+- **Explored paths**: `covopt_cli/src/main.rs`, `covopt_cli/src/ci.rs`, `covopt_cli/src/commands.rs`, `covopt_core/src/entropy.rs`, `covopt_core/src/runner.rs`
+- **Key findings**: Identified missing `--workspace` & `--all-targets` flags and unchecked `cargo check` exit status in `compute_cli_noise()` & `run_audit()`.
+- **Unexplored areas**: None. Complete investigation finished.
 
 ## Key Decisions Made
-- Audited workspace cargo tests, proc macro definitions, static analysis AST parsing, and complexity fitting models.
-- Audited all 4 core project rules across all crates and tests.
-- Captured `covopt audit` background task failure details (`covopt-macro` dyld binary execution issue).
+- Initiated read-only investigation for R3
+- Produced `analysis.md` and 5-component `handoff.md` with exact implementation plan
 
 ## Artifact Index
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2/ORIGINAL_REQUEST.md — Original task prompt
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2/BRIEFING.md — Persistent memory briefing
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2/progress.md — Liveness heartbeat
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_2/handoff.md — Detailed handoff report
+- ORIGINAL_REQUEST.md — Original request copy
+- BRIEFING.md — Context and briefing tracking
+- progress.md — Heartbeat progress log
+- analysis.md — Detailed diagnostic analysis report
+- handoff.md — 5-component handoff report

@@ -1,31 +1,40 @@
-# Progress Log — CovOpt-Analyzer v2.0 Upgrade
+# Progress Log — CovOpt-Analyzer Design Flaws Refactoring & Fix
 
 ## Current Status
-Last visited: 2026-07-25T14:45:50Z (CovOpt-Analyzer v2.0 Production Quality Upgrade Completed & Verified Clean)
+Last visited: 2026-07-26T15:42:35Z (Task Fully Complete & Verified Clean)
 
 ## Iteration Status
-Current iteration: 4 / 32
+Current iteration: 1 / 32
 
 ## Checklist
-- [x] Initialized project briefing, plan, and progress tracker.
-- [x] Milestone 1: CLI & Core Engine Robustness
-  - [x] Diagnostic workspace investigation (cargo check, cargo test, clippy, subcommands audit)
-  - [x] Fix non-interactive stdin blocking, panics, and bug fixes in all 8 subcommands (`init`, `ci`, `report`, `fix`, `audit`, `advise`, `profile`, `harden`)
-  - [x] Verification by Reviewers, Challengers & Forensic Auditor (CLEAN verdict)
-- [x] Milestone 2: Comprehensive Benchmark Suite
-  - [x] Add/update integration tests & benchmark target fixtures for complexity models ($O(1)$, $O(\log N)$, $O(N)$, $O(N \log N)$, $O(N^2)$) using `#[covopt::test]` and `covopt_param!`
-  - [x] Co-locate root `/tests/` integration test fixtures into `covopt_cli/tests/` (or package test targets)
-  - [x] Fix macro & static analysis parsing for `#[covopt::test]` and `#[covopt_test]` with stringified/array attribute arguments
-  - [x] Ensure Anti-DCE `std::hint::black_box()` and Zero-Entropy `covopt_param!` rules are followed
-  - [x] Verification by Reviewers, Challengers & Forensic Auditor (Verified & Approved)
-- [x] Milestone 3: Automated CI & Report Quality & Final Acceptance
-  - [x] Implement & verify Rayon dependency removal check across workspace Cargo.toml files (0 matches)
-  - [x] Run `cargo check --workspace --all-targets` and verify 0 errors, 0 warnings
-  - [x] Run `cargo test --workspace` and verify 100% passing tests (29 passed, 1 ignored)
-  - [x] Run `covopt ci --fast --sarif` and verify end-to-end pipeline execution & SARIF v2.1.0 JSON format
-  - [x] Run `covopt audit --json --fast 2>/dev/null | jq .` and verify strictly valid JSON parseable by `jq`
-  - [x] Final verification by Reviewer/Challenger/Auditor & Victory claim to Parent (VERDICT: CLEAN)
+- [x] Initialized plan, briefing, progress tracker, and original request for Refactoring & Fix task.
+- [x] Exploration phase complete (Explorers 1, 2, 3 reports received).
+- [x] Milestone 1 & 2 Implementation complete (Worker 1 handoff received).
+- [x] Milestone 1 & 2 Review complete (Reviewers 1 & 2 PASS verdicts).
+- [x] Milestone 1 & 2 Challenger empirical verification complete (Challengers 1 & 2 PASS verdicts).
+- [x] Milestone 1: Const Context & Inner Attributes Auto-Fix (R1 & R2)
+  - [x] Explorers investigation of auto-fix logic in `covopt_core` / `covopt_cli`.
+  - [x] Implementation of `const fn`, enum discriminants, `const`/`static`, and pattern arms filtering (R1).
+  - [x] Implementation of top-level inner attributes (`#![...]`, `//!`) preservation (R2).
+  - [x] Explicit unit tests for R1 and R2.
+  - [x] Verification by Reviewers 1 & 2.
+  - [x] Challenger 1 empirical testing.
+  - [x] Forensic Auditor verification.
+- [x] Milestone 2: Strict Workspace Audit & CLI Noise Index (R3 & R4)
+  - [x] Implementation of strict workspace audit check (`cargo check --workspace` non-zero exit) (R3).
+  - [x] Implementation of path exclusion for `tests/` and `examples/` in CLI noise index calculation (R4).
+  - [x] Explicit unit tests for R3 and R4.
+  - [x] Verification by Reviewers 1 & 2.
+  - [x] Challenger 2 empirical testing.
+  - [x] Forensic Auditor verification.
+- [x] Milestone 3: End-to-End Verification & Victory Claim
+  - [x] Full workspace check and test verification.
+  - [x] Final Audit verdict (VERDICT: CLEAN).
 
 ## Key Events Log
-- 2026-07-25T09:54:10Z: Orchestrator initialized `.agents/orchestrator/` workspace and state files.
-- 2026-07-25T14:11:46Z: Orchestrator Gen 2 active (Successor), heartbeat cron restored (`f8e64f71-a801-4ebb-922b-262a63839d64/task-11`), beginning Milestone 3 dispatch and verification.
+- 2026-07-26T15:30:00Z: Orchestrator initialized `.agents/orchestrator/` workspace for new task: Refactor & Fix design flaws (R1-R4).
+- 2026-07-26T15:32:30Z: Received exploration reports from Explorer 1 (R1/R2), Explorer 2 (R3), and Explorer 3 (R4).
+- 2026-07-26T15:35:45Z: Worker 1 delivered completed implementation of R1, R2, R3, R4 and unit tests.
+- 2026-07-26T15:36:55Z: Reviewers 1 & 2 delivered PASS verdicts for R1-R4.
+- 2026-07-26T15:39:30Z: Challengers 1 & 2 delivered PASS verdicts after empirical testing.
+- 2026-07-26T15:42:28Z: Forensic Auditor delivered VERDICT: CLEAN across all crates.

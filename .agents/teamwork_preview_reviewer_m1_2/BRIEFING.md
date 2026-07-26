@@ -1,46 +1,50 @@
-# BRIEFING — 2026-07-25T10:11:10Z
+# BRIEFING — 2026-07-26T07:36:00Z
 
 ## Mission
-Independently review and verify Worker 1's changes for Milestone 1: CLI & Core Engine Robustness verification.
+Review R3 (Strict Workspace Audit) and R4 (Refine CLI Noise Index) implementations for CovOpt-Analyzer refactoring (Milestone 2).
 
 ## 🔒 My Identity
-- Archetype: reviewer / critic
+- Archetype: teamwork_preview_reviewer
 - Roles: reviewer, critic
 - Working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_2
-- Original parent: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Milestone: Milestone 1 - CLI & Core Engine Robustness
-- Instance: 2 of 2
+- Original parent: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Milestone: Milestone 2 (R3 & R4)
+- Instance: 1 of 1
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Always prefix shell commands with `rtk`
+- Actively check for integrity violations: hardcoded test results, facade implementations, shortcuts, self-certifying work
+- Verify with `rtk cargo check --workspace`, `rtk cargo test --workspace`, `rtk cargo clippy --workspace`
 
 ## Current Parent
-- Conversation ID: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Updated: 2026-07-25T10:11:10Z
+- Conversation ID: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Updated: 2026-07-26T07:36:00Z
 
 ## Review Scope
-- **Files to review**: `runner.rs` (and associated engine/cli files), Worker 1 handoff `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_worker_m1/handoff.md`, context `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_2/context.md`
-- **Interface contracts**: PROJECT.md / SCOPE.md
-- **Review criteria**: code safety, error handling, non-interactive CI behavior, proc-macro scanner isolation, dyld filtering, integrity checks
+- **Files to review**: `covopt_core/src/runner.rs`, `covopt_cli/src/commands.rs`, `covopt_cli/src/ci.rs`, `covopt_core/src/entropy.rs`, `covopt_cli/tests/workspace_audit_test.rs`
+- **Interface contracts**: PROJECT.md / user prompt requirements R3 and R4
+- **Review criteria**: correctness, cross-platform compatibility, test coverage, clippy cleanliness, integrity
 
 ## Review Checklist
-- **Items reviewed**: `runner.rs`, `scanner.rs`, `commands.rs`, `ci.rs`, `main.rs`, `harden.rs`, `auto_harness.rs`, `dummy_heuristics.rs`, `sandbox.rs`, `profiler.rs`, `entropy.rs`
-- **Verdict**: PASS (APPROVE)
-- **Unverified claims**: None (all 4 verification commands executed and verified)
+- **Items reviewed**: `covopt_core/src/runner.rs`, `covopt_cli/src/commands.rs`, `covopt_cli/src/ci.rs`, `covopt_core/src/entropy.rs`, `covopt_cli/tests/workspace_audit_test.rs`
+- **Verdict**: PASS (Approve)
+- **Unverified claims**: 0 remaining. All claims verified by direct inspection and workspace command runs.
 
 ## Attack Surface
-- **Hypotheses tested**: Proc-macro dyld crashes on macOS, non-interactive stdin blocking, proc-macro fix scanner corruption, integrity shortcuts/facades.
-- **Vulnerabilities found**: None in updated codebase.
-- **Untested angles**: Platform-specific behavior outside macOS/Linux (e.g. MSVC Windows path formats).
+- **Hypotheses tested**:
+  - Does `check_workspace()` properly trigger `cargo check --workspace` and return `Err` on compilation failure? (Verified: Yes)
+  - Do `covopt audit` and `covopt ci` terminate with non-zero exit status 1 on `check_workspace()` failure? (Verified: Yes)
+  - Does `is_ignored_path` match `"tests"` and `"examples"` components cross-platform using `Path::components()`? (Verified: Yes)
+  - Are test warning exclusions dynamically calculated or hardcoded? (Verified: Dynamically parsed via `parse_cli_noise_from_json`)
+  - Are there any integrity violations or facade implementations? (Verified: None found)
+- **Vulnerabilities found**: None.
+- **Untested angles**: None.
 
 ## Key Decisions Made
-- Confirmed zero clippy warnings under `-D warnings`.
-- Confirmed all 21 unit/integration tests pass.
-- Verified dyld filtering logic in `runner.rs` prevents execution of proc-macro dynamic libraries.
-- Issued PASS verdict and wrote handoff report to `handoff.md`.
+- [Verdict]: Issued PASS verdict for Milestone 2 (R3 & R4).
 
 ## Artifact Index
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_2/ORIGINAL_REQUEST.md — Original request
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_2/BRIEFING.md — Working briefing index
-- /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_reviewer_m1_2/handoff.md — Reviewer 2 Handoff Report
+- `.agents/teamwork_preview_reviewer_m1_2/BRIEFING.md` — persistent working memory
+- `.agents/teamwork_preview_reviewer_m1_2/ORIGINAL_REQUEST.md` — task request log
+- `.agents/teamwork_preview_reviewer_m1_2/progress.md` — liveness heartbeat
+- `.agents/teamwork_preview_reviewer_m1_2/handoff.md` — 5-component handoff report & detailed review

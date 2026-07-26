@@ -1033,6 +1033,11 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
         }
     };
 
+    if let Err(e) = covopt_core::runner::check_workspace() {
+        eprintln!("\n[AUDIT FAILED] Workspace compilation check failed:\n{}", e);
+        std::process::exit(1);
+    }
+
     let global_output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
     eprintln!("CovOpt-Analyzer: Resolving packages for Batch Compilation Mode...");
 

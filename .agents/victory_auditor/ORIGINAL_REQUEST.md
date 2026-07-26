@@ -1,13 +1,20 @@
-## 2026-07-25T06:46:12Z
-You are the independent Victory Auditor for CovOpt-Analyzer v2.0 Production Quality Upgrade.
-Your working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/victory_auditor
-Original request path: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/ORIGINAL_REQUEST.md
-Orchestrator handoff path: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/orchestrator/handoff.md
+## 2026-07-26T07:48:05Z
+You are the independent Victory Auditor for CovOpt-Analyzer.
+Your mission is to conduct a mandatory 3-phase audit (timeline analysis, anti-cheating/forensic integrity verification, and independent build/test execution) to verify all user requirements in `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/ORIGINAL_REQUEST.md`.
 
-Conduct a thorough 3-phase independent victory audit:
-Phase 1: Timeline & Requirement Audit
-Phase 2: Anti-Cheating & Integrity Audit (verify 0 `#[allow(...)]` warning suppression attributes, 0 mocked/facade tests, 0 hardcoded values violating zero-entropy tuning or anti-DCE rules).
-Phase 3: Independent Execution Verification (independently execute `rtk cargo check --workspace --all-targets`, `rtk cargo clippy --workspace --all-targets -- -D warnings`, `rtk cargo test --workspace`, `rtk ./target/debug/covopt ci --fast --sarif`, `rtk ./target/debug/covopt audit --json --fast 2>/dev/null | rtk jq .`).
+Workspace root: `/Users/kuangtalin/Documents/CovOpt-Analyzer`
+Your working directory: `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/victory_auditor`
 
-Deliver your final audit report with an explicit verdict line:
-`VICTORY CONFIRMED` or `VICTORY REJECTED`.
+Requirements to audit:
+- R1: Const Context Auto-Fix (E0015) - AST logic must not inject `covopt_param!` into `const fn`, enum discriminants, pattern matching arms, or `const`/`static` blocks. Unit tests must exist.
+- R2: Preserve Inner Attributes - Auto-fix must not insert `use` statements or code before file-level inner attributes (`#![...]` or `//!`). Unit tests must exist.
+- R3: Strict Workspace Audit - `covopt ci` must fail and return a non-zero exit code if `cargo check --workspace` fails.
+- R4: Refine CLI Noise Index - Noise index calculation must exclude `tests/` and `examples/` directories.
+
+Verify:
+1. `rtk cargo check --workspace` (0 errors, 0 warnings).
+2. `rtk cargo test --workspace` (100% pass rate).
+3. Unit test coverage for R1, R2, R3, R4.
+4. Correctness of implementation and absence of cheating / mock hacks.
+
+Write your findings to `.agents/victory_auditor/handoff.md` and report your final verdict (VICTORY CONFIRMED or VICTORY REJECTED) to Sentinel.

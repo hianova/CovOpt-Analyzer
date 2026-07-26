@@ -1,38 +1,34 @@
-# BRIEFING — 2026-07-25T01:57:15Z
+# BRIEFING — 2026-07-26T07:32:15Z
 
 ## Mission
-Investigate Milestone 3 (CI Pipeline, Report Quality, SARIF & JSON Output Diagnostics) for CovOpt-Analyzer v2.0, evaluate acceptance criteria readiness, and write handoff report.
+Investigate R4 (Refine CLI Noise Index): path matching logic to exclude tests/ and examples/ from entropy penalties.
 
 ## 🔒 My Identity
-- Archetype: Teamwork Explorer
-- Roles: Read-only investigator
+- Archetype: teamwork_preview_explorer
+- Roles: Explorer 3
 - Working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_3
-- Original parent: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Milestone: Milestone 3 - CI Pipeline, Report Quality, SARIF & JSON Output Diagnostics
+- Original parent: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Milestone: Milestone 2: R4
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement code changes in src/ or workspace (only report/handoff files in working dir)
+- Read-only investigation — do NOT implement / modify source code files
 - Always prefix shell commands with `rtk`
+- ALWAYS prefer codebase-memory-mcp tools for code discovery if available / fallback to rtk tools
+- Write analysis to `analysis.md` and `handoff.md`
 
 ## Current Parent
-- Conversation ID: e73b8d90-04c0-4cf6-9c58-00afd44446a8
-- Updated: 2026-07-25T01:57:15Z
+- Conversation ID: 241cd607-9cb0-4fdc-a692-0cb72d197558
+- Updated: 2026-07-26T07:32:15Z
 
 ## Investigation State
-- **Explored paths**: `covopt_cli/src/ci.rs`, `covopt_cli/src/commands.rs`, `covopt_cli/src/dashboard.rs`, `covopt_cli/src/main.rs`, `covopt_core/src/config.rs`, `covopt_core/src/runner.rs`, `covopt_core/src/static_analysis.rs`
-- **Key findings**:
-  - `cargo check --workspace --all-targets`: 0 errors, 0 warnings.
-  - `cargo test --workspace`: 21/21 passing (100%).
-  - `covopt audit --json`: Strictly valid JSON on stdout parseable by `jq`; logs/banners directed to stderr.
-  - `covopt report --format sarif`: Valid SARIF v2.1.0 JSON parseable by `jq`.
-  - `covopt ci`: Functional pipeline (Fix -> Audit -> Optimize -> Harden), but Step 1 `run_scan` auto-fix incorrectly replaces magic numbers in `covopt-macro/src/lib.rs` causing compilation error in Step 2.
-- **Unexplored areas**: None, all tasks completed.
+- **Explored paths**: `covopt_core/src/entropy.rs`, `covopt_cli/src/commands.rs`
+- **Key findings**: `compute_cli_noise` in `covopt_core/src/entropy.rs` currently counts all warnings without checking `spans` or file paths. Using `path.components().any(|c| c == "tests" || c == "examples")` on Cargo JSON diagnostic spans solves the issue cleanly.
+- **Unexplored areas**: None. Investigation complete.
 
 ## Key Decisions Made
-- Verified all acceptance criteria and documented pipeline flaw in handoff.md.
+- Provided detailed implementation strategy for R4 in `analysis.md` and 5-component report in `handoff.md`.
 
 ## Artifact Index
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_3/ORIGINAL_REQUEST.md` — Original prompt request log
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_3/BRIEFING.md` — Working state briefing
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_3/progress.md` — Liveness heartbeat log
-- `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_3/handoff.md` — Milestone 3 Handoff Report
+- ORIGINAL_REQUEST.md — task specification
+- analysis.md — detailed analysis report for R4
+- handoff.md — 5-component handoff report

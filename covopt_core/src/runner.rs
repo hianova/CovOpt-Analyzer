@@ -130,6 +130,26 @@ impl CoverageRunner {
     }
 }
 
+pub fn check_workspace() -> Result<(), String> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["check", "--workspace", "--all-targets", "--message-format=json"]);
+
+    if !crate::config::should_color() {
+        cmd.arg("--color=never");
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run cargo check --workspace: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Workspace compilation failed.\n{}", stderr));
+    }
+
+    Ok(())
+}
+
 pub fn compile_workspace_tests(
     output_dir: &Path,
     packages: &[String],
@@ -787,4 +807,11 @@ fn main() {
         let map = res.unwrap();
         assert_eq!(map.get_hit_count("dummy", 1), None);
     }
+
+    #[test]
+    fn test_check_workspace() {
+        let res = check_workspace();
+        assert!(res.is_ok(), "check_workspace should succeed on healthy codebase: {:?}", res.err());
+    }
 }
+

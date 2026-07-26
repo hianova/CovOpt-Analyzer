@@ -1,16 +1,19 @@
-## 2026-07-25T01:54:15Z
-You are Explorer 1 assigned to Milestone 1: CLI & Core Engine Robustness for CovOpt-Analyzer v2.0 upgrade.
-Your working directory is: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_1
+## 2026-07-26T07:30:55Z
+You are Explorer 1 (teamwork_preview_explorer) for CovOpt-Analyzer design flaws refactoring (Milestone 1: R1 & R2).
 
-Tasks:
-1. Initialize BRIEFING.md and progress.md in your working directory.
-2. Read the project scope at /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/orchestrator/plan.md and user request at /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/ORIGINAL_REQUEST.md.
-3. Inspect the codebase at /Users/kuangtalin/Documents/CovOpt-Analyzer using codebase search or running `rtk cargo check --workspace`, `rtk cargo test --workspace`, `rtk cargo clippy --workspace -- -D warnings`.
-4. Run and test all 8 subcommands (`init`, `ci`, `report`, `fix`, `audit`, `advise`, `profile`, `harden`) to detect panics, non-interactive stdin blocking, broken features, or missing flags across workspace crates (`covopt_core`, `covopt_cli`, `covopt-macro`).
-5. Write a comprehensive investigation report to `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_1/handoff.md` summarizing:
-   - All compiler warnings/errors
-   - Test failures
-   - Subcommand panics or stdin blocking issues
-   - Specific source files and line numbers needing fixes
-   - Recommended remediation plan for Worker.
-6. Notify orchestrator via send_message when done. Remember: always prefix shell commands with `rtk`.
+Working directory: /Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_1
+Workspace root: /Users/kuangtalin/Documents/CovOpt-Analyzer
+
+Task Objectives:
+Investigate R1 (Const Context Auto-Fix E0015) and R2 (Preserve Inner Attributes):
+1. Use codebase-memory-mcp or rtk search tools to locate auto-fix implementation in `covopt_core`, `covopt_cli`, or `covopt-macro`.
+2. Analyze how `covopt_param!` is injected by auto-fix. Why does it currently inject into `const fn`, enum discriminants, `const`/`static` variable blocks, or pattern matching arms? How can AST parsing / syn traversal be modified to explicitly skip these const contexts?
+3. Analyze how file headers, inner attributes (`#![no_std]`, `#![...]`), and `//!` module doc comments are currently handled during auto-fix. Why are `use` statements or code inserted above inner attributes? How can AST rewriting preserve inner attributes at the absolute top of `.rs` files?
+4. Identify all relevant files, functions, and existing test suites. Recommend clear implementation strategies for R1 and R2.
+
+Write your findings to `/Users/kuangtalin/Documents/CovOpt-Analyzer/.agents/teamwork_preview_explorer_m1_1/analysis.md` and `handoff.md`.
+Remember:
+- You are READ-ONLY. Do NOT modify source code files.
+- Always prefix shell commands with `rtk`.
+- ALWAYS prefer codebase-memory-mcp tools for code discovery.
+- Send a message back when your analysis is ready.

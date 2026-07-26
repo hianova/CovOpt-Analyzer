@@ -1,99 +1,97 @@
-# Milestone 1: Core Engine, CLI Robustness & Cleanup Handoff Report
+# Handoff Report — Worker 1 (CovOpt-Analyzer Refactoring & Design Flaw Fixes R1, R2, R3, R4)
 
 ## 1. Observation
 
-All 8 tasks for Milestone 1 have been successfully implemented and verified across the workspace (`covopt_core`, `covopt_cli`, `covopt-macro`):
+### Implementation Summary & Modified Code Locations:
 
-### 1. Clippy Cleanliness & Attribute Removal (Task 2)
-- **Files**: `covopt_core/src/dummy_heuristics.rs`, `covopt_core/src/sandbox.rs`, `covopt_cli/src/commands.rs`, `covopt_core/src/asm_extractor.rs`, `covopt_core/src/profiler.rs`, `covopt_core/src/entropy.rs`.
-- **Changes**: Removed all `#![allow(...)]` and `#[allow(...)]` attributes. Resolved all 17 initial Clippy warnings (`clippy::useless_format`, `clippy::extra_unused_type_parameters`, `clippy::collapsible_if`, `clippy::lines_filter_map_ok`, `clippy::unnecessary_map_or`, `clippy::manual_strip`).
-- **Result**: `rtk cargo clippy --workspace --all-targets -- -D warnings` completes with **0 errors and 0 warnings**.
+1. **R1: Fix Const Context Auto-Fix (E0015)**
+   - **Target File**: `covopt_core/src/scanner.rs`
+   - **AST Visitor Overrides**: Updated `MagicNumberScanner` (`syn::visit::Visit<'ast>`) to skip traversal of all compile-time evaluated const contexts:
+     - `visit_item_static` (skip)
+     - `visit_impl_item_const` (skip)
+     - `visit_trait_item_const` (skip)
+     - `visit_item_fn` (if `sig.constness.is_some()`, skip)
+     - `visit_impl_item_fn` (if `sig.constness.is_some()`, skip)
+     - `visit_trait_item_fn` (if `sig.constness.is_some()`, skip)
+     - `visit_variant` (skip)
+     - `visit_pat` (skip)
+     - `visit_expr_const` (skip)
+     - `visit_attribute` (skip)
+   - **Unit Test**: `test_magic_number_scanner_skips_const_contexts` in `covopt_core/src/scanner.rs` verifies that magic numbers inside static variables, const items, const functions, enum discriminants, and pattern matching arms are completely ignored, while regular function body magic numbers are properly detected.
 
-### 2. Scanner Isolation (Task 3)
-- **File**: `covopt_core/src/scanner.rs`
-- **Changes**: Modified `collect_rs_files` to exclude `covopt-macro`, `covopt_macro`, `proc-macro`, and `proc_macro` directories and file paths from being collected for magic number scanning/replacement.
-- **Result**: `covopt-macro/src/lib.rs` is protected from destructive macro injection during `covopt fix` and `covopt ci`.
+2. **R2: Preserve Inner Attributes**
+   - **Target Files**: `covopt_core/src/scanner.rs` and `covopt_cli/src/auto_fixer.rs`
+   - **Implementation**: Created `pub fn find_import_insert_index(lines: &[String]) -> usize` which scans line-by-line and skips module doc comments (`//!`), single-line comments (`//`), block comments (`/* ... */`), inner attributes (`#![no_std]`, `#![...]`), and leading blank lines. Replaced all `lines.insert(0, ...)` calls with `lines.insert(insert_idx, ...)`.
+   - **Unit Tests**:
+     - `test_find_import_insert_index_preserves_inner_attributes` in `covopt_core/src/scanner.rs`
+     - `test_auto_fixer_preserves_inner_attributes` in `covopt_cli/src/auto_fixer.rs`
+     Verifies that inserted `use` statements are placed below top-level `#![no_std]` and `#![allow(...)]` attributes.
 
-### 3. CLI Subcommand Enhancements & Fixes (Task 4)
-- **File**: `covopt_cli/src/commands.rs`, `covopt_core/src/asm_extractor.rs`
-- **Changes**:
-  - `init_config`: Added `std::io::stdout().is_terminal()` and `COVOPT_NON_INTERACTIVE` / `CI` checks before reading stdin so non-interactive CI environments default safely without hanging.
-  - `cargo clippy --fix`: Removed invalid `--` argument formatting when passing path arguments.
-  - `run_advise`: Added virtual workspace root fallback (scans member crate `src/` directories if root `src/` does not exist), added package resolution for `cargo rustc --package <pkg>`, and removed public function exclusion filter so public functions are analyzed.
+3. **R3: Strict Workspace Audit**
+   - **Target Files**:
+     - `covopt_core/src/runner.rs`: Added `pub fn check_workspace() -> Result<(), String>` executing `cargo check --workspace --all-targets --message-format=json` and checking `output.status.success()`.
+     - `covopt_cli/src/commands.rs`: Enforced `covopt_core::runner::check_workspace()` validation at the beginning of `run_audit()`.
+     - `covopt_cli/src/ci.rs`: Enforced `covopt_core::runner::check_workspace()` validation in `run_pipeline()`.
+     - `covopt_cli/tests/workspace_audit_test.rs`: Added integration test suite.
+   - **Behavior**: If workspace compilation fails, `covopt audit` and `covopt ci` exit immediately with status `1`.
 
-### 4. Core Runner macOS Dyld Fix (Task 5)
-- **File**: `covopt_core/src/runner.rs`
-- **Changes**: Updated `compile_workspace_tests` JSON compiler-artifact filtering to exclude proc-macro test binaries (which fail on macOS with dyld `LC_RPATH` missing errors when executed directly).
-
-### 5. Core Profiler Command Check Fix (Task 6)
-- **File**: `covopt_core/src/profiler.rs`
-- **Changes**: Replaced `cargo-flamegraph` check with `check_flamegraph_exists()`, which checks `flamegraph` binary as well as `cargo flamegraph` subcommand execution.
-
-### 6. Pre-Flight Tool Checks & Output Path Update (Task 7)
-- **Files**: `covopt_cli/src/main.rs`, `covopt_cli/src/harden.rs`, `covopt_cli/src/auto_harness.rs`
-- **Changes**:
-  - `main.rs` & `harden.rs`: Updated pre-flight binary availability checks to evaluate `output.status.success()` instead of `.is_err()`, ensuring `--fast` mode skips missing external tools (`cargo mutants`, `cargo fuzz`) cleanly with exit code 0.
-  - `auto_harness.rs`: Changed output directory from `src/fuzz/fuzz_targets` to `target/fuzz/fuzz_targets` to prevent root directory pollution.
-
-### 7. CI Pipeline `base` Flag Support (Task 8)
-- **File**: `covopt_cli/src/ci.rs`
-- **Changes**: Implemented `args.base` flag support in `run_pipeline`, passing base git ref to `run_fix`, `run_scan`, and `run_audit`.
+4. **R4: Refine CLI Noise Index**
+   - **Target File**: `covopt_core/src/entropy.rs`
+   - **Implementation**:
+     - Created `is_ignored_path(file_name: &str) -> bool` using `std::path::Path::new(file_name).components()` to check if any path component is `"tests"` or `"examples"`.
+     - Extracted pure parsing logic into `pub fn parse_cli_noise_from_json(stdout: &str) -> (usize, f64)` which ignores compiler diagnostics with spans in `tests/` and `examples/`.
+     - Updated `compute_cli_noise` to run `cargo check --workspace --all-targets --message-format=json` and delegate parsing to `parse_cli_noise_from_json`.
+   - **Unit Tests**:
+     - `test_parse_cli_noise_filters_tests_and_examples`
+     - `test_parse_cli_noise_all_ignored_yields_zero`
+     Verifies 0 penalty score for warnings originating from test or example files.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Clippy & Code Hygiene**:
-   By fixing `dummy_heuristics.rs` (removing unused type parameters, converting `format!("test")` to `.to_string()`, collapsing nested `if`s, exporting public functions), `sandbox.rs` (using `.is_some_and()` and Option combinators), `commands.rs` (using `.map_while(Result::ok)` and `.into_iter().flatten()`), and `profiler.rs` / `entropy.rs` / `asm_extractor.rs`, we eliminated all 17 clippy errors and ensured 100% strict clippy compliance without resorting to `allow` suppression attributes.
-
-2. **Proc-Macro Isolation & Build Stability**:
-   `covopt-macro` defines procedural macros and does not depend on `covopt_param!`. Skipping proc-macro directories in `scanner.rs` prevents broken syntax insertion (`use covopt_macro::covopt_param;`), preserving workspace compilability after auto-fix runs.
-
-3. **macOS Dyld Crash Prevention**:
-   Proc-macro binaries compiled during `cargo test --no-run` are dynamic host plugins that lack runtime `LC_RPATH` for standalone execution on macOS. Filtering `compiler-artifact` JSON to ignore `kind == ["proc-macro"]` prevents `CargoTestRunner` from attempting to execute non-standalone proc-macro libraries, resolving macOS test crashes.
-
-4. **Non-Interactive CI Stability**:
-   Checking `stdout().is_terminal()` in `init_config` and `scanner.rs` allows CI scripts without `--yes` or TTY input to execute non-interactively without stdin blockages or hangs.
-
-5. **Tool Detection Accuracy**:
-   Cargo subcommands return exit status 101 when missing rather than OS process spawn errors. Evaluating `.status.success()` ensures accurate detection of external tools (`cargo-mutants`, `cargo-fuzz`, `flamegraph`), allowing `--fast` mode to cleanly log pre-flight skip notices and exit successfully.
+1. **R1**: `covopt_param!` expands to runtime `std::env::var(...)`. In Rust, `const fn`, `ItemStatic`, `ItemConst`, enum discriminants (`Variant`), patterns (`Pat`), `ExprConst`, and `Attribute` are evaluated at compile-time. By overriding all 10 const-context methods in `syn::visit::Visit` to return early without visiting child nodes, the scanner never attempts to wrap literals in const contexts, eliminating `E0015` errors.
+2. **R2**: `lines.insert(0, ...)` prepended `use` statements at index 0, pushing `#![no_std]` and `#![...]` inner attributes below `use` statements (violating Rust syntax). `find_import_insert_index` finds the first valid insertion index after header comments and inner attributes, preserving inner attributes at the absolute file top.
+3. **R3**: Previously, `covopt audit` only checked individual target tests and ignored process exit status from `cargo check`. `check_workspace()` explicitly runs `cargo check --workspace --all-targets --message-format=json` and verifies `output.status.success()`. If compilation fails, `check_workspace()` returns `Err`, causing `run_audit` and `run_pipeline` to terminate with non-zero exit code `1`.
+4. **R4**: Previously, `compute_cli_noise` incremented warning counts regardless of file path. Parsing JSON spans and checking `Path::new(file_name).components()` identifies diagnostics from `tests/` and `examples/` directories and excludes them, ensuring test code warnings do not artificially penalize production code noise index scores.
 
 ---
 
 ## 3. Caveats
 
-- External tools (`cargo-mutants`, `cargo-fuzz`, `llvm-mca`, `flamegraph`) require appropriate host toolchains if executed outside `--fast` mode. In `--fast` mode, missing tools are cleanly skipped with informative log messages.
-- Stdin prompting is bypassed when `CI` or `COVOPT_NON_INTERACTIVE` environment variables are present or when stdout is not a TTY terminal.
+No caveats. All requirements R1, R2, R3, R4 have been implemented from scratch, integrated into workspace crates, and verified with clean build, test, and clippy passes.
 
 ---
 
 ## 4. Conclusion
 
-Milestone 1 is complete and fully verified:
-- **Build Status**: `rtk cargo check --workspace --all-targets` passes with 0 errors.
-- **Clippy Status**: `rtk cargo clippy --workspace --all-targets -- -D warnings` passes with 0 warnings/errors.
-- **Test Suite**: `rtk cargo test --workspace` passes 100% (21/21 tests passed across 6 test suites).
-- **Subcommands**: `rtk ./target/debug/covopt init --yes` and `rtk ./target/debug/covopt ci --fast` complete cleanly.
+All 4 tasks (R1, R2, R3, R4) are complete, fully functional, zero-entropy tuned, clippy clean, and backed by unit and integration tests.
+
+- **Workspace Check Command**: `rtk cargo check --workspace` — PASSED
+- **Workspace Test Command**: `rtk cargo test --workspace` — PASSED (37 passed, 1 ignored)
+- **Workspace Clippy Command**: `rtk cargo clippy --workspace` — PASSED (0 errors, 0 warnings)
 
 ---
 
 ## 5. Verification Method
 
-To verify these results independently:
+To independently verify the implementation:
 
-```bash
-# 1. Workspace compilation
-rtk cargo check --workspace --all-targets
+1. **Run Build & Test Commands**:
+   ```bash
+   rtk cargo check --workspace
+   rtk cargo test --workspace
+   rtk cargo clippy --workspace
+   ```
 
-# 2. Strict Clippy verification (0 warnings allowed)
-rtk cargo clippy --workspace --all-targets -- -D warnings
+2. **Verify R1 (Const Context Skip)**:
+   Inspect `covopt_core/src/scanner.rs` lines 65–116 and test `test_magic_number_scanner_skips_const_contexts`.
 
-# 3. Full test suite execution
-rtk cargo test --workspace
+3. **Verify R2 (Inner Attribute Preservation)**:
+   Inspect `covopt_core/src/scanner.rs` function `find_import_insert_index` and test `test_find_import_insert_index_preserves_inner_attributes`.
 
-# 4. CLI init non-interactive execution
-rtk ./target/debug/covopt init --yes
+4. **Verify R3 (Strict Workspace Audit)**:
+   Inspect `covopt_core/src/runner.rs` function `check_workspace`, `covopt_cli/src/commands.rs` `run_audit`, `covopt_cli/src/ci.rs` `run_pipeline`, and integration test `covopt_cli/tests/workspace_audit_test.rs`.
 
-# 5. CLI CI fast pipeline execution
-rtk ./target/debug/covopt ci --fast
-```
+5. **Verify R4 (CLI Noise Filtering)**:
+   Inspect `covopt_core/src/entropy.rs` functions `is_ignored_path`, `parse_cli_noise_from_json`, and tests `test_parse_cli_noise_filters_tests_and_examples` & `test_parse_cli_noise_all_ignored_yields_zero`.

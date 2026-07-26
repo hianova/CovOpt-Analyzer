@@ -1,89 +1,37 @@
-# Handoff Report — Milestone 3: CI Pipeline, Report Quality, SARIF & JSON Output Diagnostics
+# Handoff Report: R4 (Refine CLI Noise Index)
 
 ## 1. Observation
-
-### A. Workspace Diagnostics & Acceptance Criteria Evaluation
-- `rtk cargo check --workspace --all-targets`:
-  - Result: 0 errors, 0 warnings (`Finished dev profile [unoptimized + debuginfo] target(s) in 0.05s`).
-- `rtk cargo test --workspace`:
-  - Result: 100% passing (`21 passed (6 suites, 0.55s)`).
-- `rtk ./target/debug/covopt report --format sarif`:
-  - Output: `🚀 Generating SARIF v2.1.0 Report... \n ✅ SARIF report written to "target/covopt/covopt.sarif"`.
-- `rtk jq . target/covopt/covopt.sarif`:
-  - Output: Valid JSON parseable by `jq`. Schema `$schema` is `"https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"`, version is `"2.1.0"`, `runs` array contains tool metadata and rules array.
-
-### B. `covopt audit --json` Stdout vs Stderr Isolation
-- File: `covopt_cli/src/commands.rs`, lines 1004–1184 (`run_audit`).
-- Line 1179: `println!("{}", serde_json::to_string_pretty(&json_results).unwrap());` is used exclusively for JSON output.
-- All non-JSON banners (`Auditing target:...`), progress status, debug prints (`eprintln!("DEBUG: successful_exe = ...")`), and profiling benchmarks (`eprintln!("[Profile] execute_tests...")`) are strictly directed to `stderr` (`eprintln!`).
-- When `covopt audit --json` is executed, `stdout` contains strictly the JSON payload, parseable by `jq` without syntax errors.
-
-### C. `covopt ci` Subcommand Pipeline & Error Points
-- File: `covopt_cli/src/ci.rs`, lines 6–75 (`run_pipeline`).
-- Pipeline flow:
-  1. Step 1 (Fix): `commands::run_fix(None);` and `covopt_core::scanner::run_scan(None, true, false);`
-  2. Step 2 (Audit): `commands::run_audit(&AuditArgs { test: None, fast: args.fast, json: false, staged: false });`
-  3. Step 3 (Optimize): `crate::explore::run("src", "UnknownTrait", "evaluate_fitness", covopt_param!("M_29_75", 0.99));`
-  4. Step 4 (Harden): `harden::run_fuzz(&target_config.test)` (if `fuzz_iterations > 0`).
-  5. Post-CI: Dashboard generation in `main.rs` if `args.report` or `args.sarif` is true.
-- **Observed Vulnerability/Bug in Step 1**:
-  - `covopt_core::scanner::run_scan` scans all `.rs` files in workspace for magic numbers and converts them to `covopt_param!("...", val)`.
-  - When `run_scan` modified `covopt-macro/src/lib.rs` (line 23), it injected `use covopt_macro::covopt_param;` at line 1.
-  - Because `covopt-macro` is a proc-macro crate itself, self-referencing `use covopt_macro::covopt_param;` caused compilation errors: `error: cannot find macro covopt_param in this scope`.
-  - Consequently, Step 2 (`covopt audit`) failed during workspace compilation with error: `Failed to compile workspace tests: Compilation failed: error: could not compile covopt-macro`.
+- **Code Locations**:
+  - `covopt_core/src/entropy.rs:35-68`: `compute_cli_noise(details: &mut String) -> f64`
+  - `covopt_core/src/entropy.rs:14-33`: `calculate_entropy_score(...)`
+  - `covopt_cli/src/commands.rs:1127, 1165`: Target audit entropy evaluation
+- **Current Behavior**:
+  - `compute_cli_noise` invokes `cargo check --message-format=json` and parses stdout JSON line by line.
+  - It checks only `message.level == "warning"` or `"error"`.
+  - It does NOT inspect `message.spans` or path names (`file_name`).
+  - Standard output (`println!`, `eprintln!`) and compiler warnings in test files (`tests/` directory) and example files (`examples/`) are currently penalized under entropy calculations (adding 2.0 points per warning up to 30.0).
 
 ## 2. Logic Chain
-
-1. **Workspace Compilation & Test Suite**: `cargo check --workspace` and `cargo test --workspace` run with 0 errors, 0 warnings, and 21/21 passing tests. This proves core codebase health.
-2. **SARIF Report Validation**: `covopt report --format sarif` outputs valid JSON adhering to SARIF v2.1.0 schema specification, verified via `jq . target/covopt/covopt.sarif`.
-3. **JSON Audit Isolation**: `run_audit` segregates text logs/profiling data to `stderr` (`eprintln!`) and emits the structured JSON object to `stdout` (`println!`). Redirecting stderr (`2>/dev/null`) leaves clean JSON on stdout.
-4. **CI Pipeline Robustness Bug**: In `covopt ci`, Step 1 auto-fix (`run_scan`) modifies files in proc-macro crates (`covopt-macro`), injecting macro calls that cannot be resolved in proc-macro definitions. This causes subsequent Step 2 (`covopt audit`) to fail during workspace test compilation. Excluding proc-macro crates (`covopt-macro`) from magic number replacement or guarding macro imports fixes this pipeline breakage.
+1. `compute_cli_noise` is responsible for evaluating compiler diagnostics to determine CLI noise entropy score.
+2. Cargo compiler JSON messages include a `spans` array containing `file_name` (string path) and `is_primary` (boolean).
+3. Using `std::path::Path::new(file_name).components()`, we can check if any path component equals `"tests"` or `"examples"`.
+4. If a diagnostic's primary spans (or all spans) belong to files inside `tests/` or `examples/`, the warning/error originates from non-production code and must be excluded from CLI noise index calculations.
+5. Extracting JSON line parsing into a pure function `parse_cli_noise_from_json(stdout: &str) -> (usize, f64)` decouples external process execution from warning filtering, enabling fast, isolated unit tests.
 
 ## 3. Caveats
-
-- **Uninstalled Tooling in Environments**: If `cargo-fuzz` or `cargo-mutants` are not installed, Step 4 in `covopt ci` requires `--fast` or `--skip_harden` to skip missing binary failures in non-interactive CI environments.
-- **Async Background Task Execution**: During local execution, `compile_asm()` invokes `cargo test --release --no-run`, which may lock `.cargo/config` build lock briefly when multiple cargo invocations run simultaneously.
+- No caveats. Cargo check JSON diagnostic format (`spans` array with `file_name` and `is_primary`) has been stable across Rust toolchain versions.
 
 ## 4. Conclusion
-
-- **Acceptance Criteria Readiness**:
-  - `cargo check --workspace`: **PASS** (0 errors, 0 warnings)
-  - `cargo test --workspace`: **PASS** (100% passing, 21/21 tests)
-  - `covopt audit --json`: **PASS** (Strictly valid JSON parseable by `jq`)
-  - `covopt report --format sarif`: **PASS** (Valid SARIF v2.1.0 schema compliance)
-  - `covopt ci`: **PASS WITH RECOMMENDATION** — The pipeline sequence is functional, but `scanner::run_scan` should skip proc-macro crates (`covopt-macro`) to prevent auto-fix compilation regressions during `covopt ci`.
+To complete R4:
+1. In `covopt_core/src/entropy.rs`, implement `is_ignored_path(file_name: &str) -> bool` using `path.components().any(...)`.
+2. Implement `should_exclude_warning(msg: &serde_json::Value) -> bool` to filter out messages whose primary spans originate from `tests/` or `examples/`.
+3. Refactor JSON parsing logic into `parse_cli_noise_from_json(stdout: &str) -> (usize, f64)` and update `compute_cli_noise`.
+4. Add comprehensive unit tests in `covopt_core/src/entropy.rs` under `#[cfg(test)] mod tests`.
 
 ## 5. Verification Method
-
-To independently verify all findings:
-
-1. **Verify Cargo Check**:
-   ```bash
-   rtk cargo check --workspace --all-targets
-   ```
-   Expect exit code 0 and 0 warnings.
-
-2. **Verify Cargo Test**:
-   ```bash
-   rtk cargo test --workspace
-   ```
-   Expect 21 passing tests across 6 test suites.
-
-3. **Verify SARIF Output**:
-   ```bash
-   rtk ./target/debug/covopt report --format sarif
-   rtk jq . target/covopt/covopt.sarif
-   ```
-   Expect valid JSON output with version `"2.1.0"`.
-
-4. **Verify JSON Audit**:
-   ```bash
-   rtk ./target/debug/covopt audit --json --fast 2>/dev/null | rtk jq .
-   ```
-   Expect valid JSON object containing `"status": "success"` and `"targets": [...]`.
-
-5. **Verify CI Pipeline**:
-   ```bash
-   rtk ./target/debug/covopt ci --fast --sarif
-   ```
-   Inspect pipeline execution steps.
+Run the following commands:
+```bash
+rtk cargo test --package covopt_core
+rtk cargo check --workspace
+```
+Check that unit tests pass and verifying that mock cargo diagnostics with `tests/` or `examples/` spans yield a noise score of `0.0`.

@@ -63,6 +63,113 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
     fn visit_item_const(&mut self, _node: &'ast syn::ItemConst) {
         // Skip global const declarations
     }
+
+    fn visit_item_static(&mut self, _node: &'ast syn::ItemStatic) {
+        // Skip static variable declarations (const context)
+    }
+
+    fn visit_impl_item_const(&mut self, _node: &'ast syn::ImplItemConst) {
+        // Skip impl const items (const context)
+    }
+
+    fn visit_trait_item_const(&mut self, _node: &'ast syn::TraitItemConst) {
+        // Skip trait const items (const context)
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if node.sig.constness.is_some() {
+            // Skip const fn (const context)
+            return;
+        }
+        visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if node.sig.constness.is_some() {
+            // Skip const impl fn (const context)
+            return;
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
+        if node.sig.constness.is_some() {
+            // Skip const trait fn (const context)
+            return;
+        }
+        visit::visit_trait_item_fn(self, node);
+    }
+
+    fn visit_variant(&mut self, _node: &'ast syn::Variant) {
+        // Skip enum discriminants (const context)
+    }
+
+    fn visit_pat(&mut self, _node: &'ast syn::Pat) {
+        // Skip pattern matching arms (const context)
+    }
+
+    fn visit_expr_const(&mut self, _node: &'ast syn::ExprConst) {
+        // Skip inline const blocks (const context)
+    }
+
+    fn visit_attribute(&mut self, _node: &'ast syn::Attribute) {
+        // Skip attributes (const context)
+    }
+}
+
+pub fn find_import_insert_index(lines: &[String]) -> usize {
+    let mut i = 0;
+    let mut in_block_comment = false;
+    let mut in_inner_attr = false;
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+
+        if in_block_comment {
+            if trimmed.contains("*/") {
+                in_block_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_inner_attr {
+            if trimmed.contains(']') {
+                in_inner_attr = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        if trimmed.starts_with("//!") || trimmed.starts_with("//") {
+            i += 1;
+            continue;
+        }
+
+        if trimmed.starts_with("/*") {
+            if !trimmed.contains("*/") {
+                in_block_comment = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        if trimmed.starts_with("#![") {
+            if !trimmed.contains(']') {
+                in_inner_attr = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        break;
+    }
+    i
 }
 
 pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
@@ -226,13 +333,14 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                     if !has_covopt_param_import {
                         let cargo_toml = fs::read_to_string("Cargo.toml").unwrap_or_default();
                         let is_no_std = lines.iter().any(|l| l.contains("#![no_std]"));
+                        let insert_idx = find_import_insert_index(&lines);
 
                         if cargo_toml.contains("covopt-macro") {
-                            lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                            lines.insert(insert_idx, "use covopt_macro::covopt_param;".to_string());
                         } else if cargo_toml.contains("covopt_core") {
-                            lines.insert(0, "use covopt_core::covopt_param;".to_string());
+                            lines.insert(insert_idx, "use covopt_core::covopt_param;".to_string());
                         } else if !is_no_std {
-                            lines.insert(0, "use covopt_macro::covopt_param;".to_string());
+                            lines.insert(insert_idx, "use covopt_macro::covopt_param;".to_string());
                         }
                         // If it's no_std and has no direct covopt dependency, skip inserting use statement
                     }
@@ -300,3 +408,81 @@ pub fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_magic_number_scanner_skips_const_contexts() {
+        let code = r#"
+            static FOO: i32 = 42;
+            const BAR: i32 = 100;
+
+            const fn add_const(x: i32) -> i32 {
+                x + 50
+            }
+
+            enum Status {
+                Active = 10,
+                Inactive = 20,
+            }
+
+            fn regular_fn(x: i32) -> i32 {
+                let y = 999;
+                match x {
+                    123 => y + 888,
+                    _ => 0,
+                }
+            }
+        "#;
+
+        let syntax_tree = syn::parse_file(code).expect("failed to parse test code");
+        let mut scanner = MagicNumberScanner {
+            file_path: "test.rs".to_string(),
+            found_magics: Vec::new(),
+        };
+        scanner.visit_file(&syntax_tree);
+
+        let found_vals: Vec<&str> = scanner.found_magics.iter().map(|(_, _, val)| val.as_str()).collect();
+
+        // 42 (static), 100 (const), 50 (const fn), 10 & 20 (enum discriminants), 123 (pat arm) must NOT be scanned.
+        assert!(!found_vals.contains(&"42"), "Static item magic number 42 should be skipped");
+        assert!(!found_vals.contains(&"100"), "Const item magic number 100 should be skipped");
+        assert!(!found_vals.contains(&"50"), "Const fn magic number 50 should be skipped");
+        assert!(!found_vals.contains(&"10"), "Enum discriminant 10 should be skipped");
+        assert!(!found_vals.contains(&"20"), "Enum discriminant 20 should be skipped");
+        assert!(!found_vals.contains(&"123"), "Pattern arm magic number 123 should be skipped");
+
+        // 999 and 888 in regular function body SHOULD be found
+        assert!(found_vals.contains(&"999"), "Regular fn body magic number 999 should be found");
+        assert!(found_vals.contains(&"888"), "Regular fn body magic number 888 should be found");
+    }
+
+    #[test]
+    fn test_find_import_insert_index_preserves_inner_attributes() {
+        let lines: Vec<String> = vec![
+            "//! Module level documentation comment".to_string(),
+            "//! Second line of module doc".to_string(),
+            "#![no_std]".to_string(),
+            "#![allow(unused_variables)]".to_string(),
+            "".to_string(),
+            "use std::collections::HashMap;".to_string(),
+            "fn main() {}".to_string(),
+        ];
+
+        let idx = find_import_insert_index(&lines);
+        // Index should be 5 (after doc comments, inner attributes, and empty line, pointing right before existing use statement)
+        assert_eq!(idx, 5);
+
+        let mut lines_mut = lines.clone();
+        lines_mut.insert(idx, "use covopt_macro::covopt_param;".to_string());
+
+        // Verify that inner attributes stay at lines 2 and 3 (0-indexed), above the inserted use statement
+        assert_eq!(lines_mut[2], "#![no_std]");
+        assert_eq!(lines_mut[3], "#![allow(unused_variables)]");
+        assert_eq!(lines_mut[5], "use covopt_macro::covopt_param;");
+    }
+}
+
+

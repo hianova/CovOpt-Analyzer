@@ -1,11 +1,12 @@
-# Progress — Milestone 2 Explorer
+# Progress Log
 
-Last visited: 2026-07-25T01:55:36Z
+Last visited: 2026-07-26T15:32:15Z
 
-- [x] Step 1: Initialize ORIGINAL_REQUEST.md, BRIEFING.md, and progress.md
-- [x] Step 2: Read project plan and rules
-- [x] Step 3: Run `rtk cargo test --workspace -- --nocapture` and analyze test output
-- [x] Step 4: Audit codebase for macro definitions and complexity model implementations
-- [x] Step 5: Audit codebase against 4 project rules (Zero-Entropy Tuning, Anti-DCE, Lock-Free Critical Paths, Strict Clippy Cleanliness)
-- [ ] Step 6: Write handoff report `handoff.md`
-- [ ] Step 7: Send message to parent orchestrator
+## Milestone 2: R3 (Strict Workspace Audit) Investigation
+- [x] Initialized ORIGINAL_REQUEST.md and BRIEFING.md
+- [x] Located `covopt ci` and `covopt audit` implementations in `covopt_cli` and `covopt_core`
+- [x] Analyzed `cargo check` invocation points and identified missing `--workspace` and `--all-targets` flags
+- [x] Analyzed exit code handling in `compute_cli_noise()` and `commands::run_audit()`
+- [x] Determined exact root causes for `covopt ci` reporting "[CI OK] Audit passed" despite compilation failures
+- [x] Defined precise implementation strategy and code changes for R3
+- [x] Drafted `analysis.md` and `handoff.md`
