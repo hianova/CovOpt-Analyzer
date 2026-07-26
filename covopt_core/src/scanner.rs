@@ -218,6 +218,9 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let mut total_found = 0;
     let mut total_fixed = 0;
 
+    let config = crate::config::CovOptConfig::load(".covopt.toml").ok();
+    let macro_path = config.and_then(|c| c.macro_path).unwrap_or_else(|| "covopt_macro::covopt_param".to_string());
+
     for file_path in files_to_scan {
         if let Ok(content) = fs::read_to_string(&file_path)
             && let Ok(syntax_tree) = syn::parse_file(&content)
@@ -247,8 +250,8 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         let end_col = end_loc.column;
 
                         let replacement = format!(
-                            "covopt_param!(\"M_{}_{}\", {})",
-                            start_loc.line, start_loc.column, val
+                            "{}!(\"M_{}_{}\", {})",
+                            macro_path, start_loc.line, start_loc.column, val
                         );
 
                         if start_col <= end_col && end_col <= line_str.len() {
@@ -323,27 +326,7 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                         let _ = fs::copy(&file_path, &backup_path);
                     }
 
-                    // Smart import check: only insert if covopt_param is not already imported/re-exported or defined
-                    let has_covopt_param_import = lines.iter().any(|l| {
-                        let trimmed = l.trim();
-                        (trimmed.starts_with("use ") || trimmed.contains("macro_rules!"))
-                            && trimmed.contains("covopt_param")
-                    });
 
-                    if !has_covopt_param_import {
-                        let cargo_toml = fs::read_to_string("Cargo.toml").unwrap_or_default();
-                        let is_no_std = lines.iter().any(|l| l.contains("#![no_std]"));
-                        let insert_idx = find_import_insert_index(&lines);
-
-                        if cargo_toml.contains("covopt-macro") {
-                            lines.insert(insert_idx, "use covopt_macro::covopt_param;".to_string());
-                        } else if cargo_toml.contains("covopt_core") {
-                            lines.insert(insert_idx, "use covopt_core::covopt_param;".to_string());
-                        } else if !is_no_std {
-                            lines.insert(insert_idx, "use covopt_macro::covopt_param;".to_string());
-                        }
-                        // If it's no_std and has no direct covopt dependency, skip inserting use statement
-                    }
                     if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
                         eprintln!("Failed to write {}: {}", file_path.display(), e);
                     }

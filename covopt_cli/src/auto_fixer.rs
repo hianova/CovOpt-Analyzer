@@ -82,7 +82,6 @@ impl AutoFixer {
                 fs::read_to_string(&file_path).context("Failed to read file for AST fixing")?;
             let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
             targets.sort_by(|a, b| b.line.cmp(&a.line).then_with(|| b.column.cmp(&a.column)));
-            let mut needs_import = false;
             for t in targets {
                 let line_idx = t.line - 1;
                 let col = t.column;
@@ -90,13 +89,8 @@ impl AutoFixer {
                 let original_line = lines[line_idx].clone();
                 let prefix = &original_line[..col];
                 let suffix = &original_line[col + len..];
-                let replacement = format!("std::hint::black_box({})", t.original_expr);
+                let replacement = format!("core::hint::black_box({})", t.original_expr);
                 lines[line_idx] = format!("{}{}{}", prefix, replacement, suffix);
-                needs_import = true;
-            }
-            if needs_import && !lines.iter().any(|l| l.contains("std::hint::black_box")) {
-                let insert_idx = covopt_core::scanner::find_import_insert_index(&lines);
-                lines.insert(insert_idx, "use std::hint::black_box;".to_string());
             }
             fs::write(&file_path, lines.join("\n")).context("Failed to write AST fix to file")?;
             println!("  -> Auto-fixed AST in {}", file_path);
@@ -144,7 +138,7 @@ mod tests {
     }
     #[test]
     fn test_rule2_scanner_ignores_wrapped_loop() {
-        let code = "fn main() {\n    for i in std::hint::black_box(0..10) {\n        println!(\"{}\", i);\n    }\n}";
+        let code = "fn main() {\n    for i in core::hint::black_box(0..10) {\n        println!(\"{}\", i);\n    }\n}";
         let syntax_tree = syn::parse_file(code).unwrap();
         let mut scanner = Rule2Scanner {
             file_path: "dummy.rs".to_string(),
@@ -164,10 +158,10 @@ mod tests {
         let idx = covopt_core::scanner::find_import_insert_index(&lines);
         assert_eq!(idx, 2);
         let mut lines_mut = lines.clone();
-        lines_mut.insert(idx, "use std::hint::black_box;".to_string());
+        lines_mut.insert(idx, "use core::hint::black_box;".to_string());
         assert_eq!(lines_mut[0], "//! Test module doc");
         assert_eq!(lines_mut[1], "#![allow(dead_code)]");
-        assert_eq!(lines_mut[2], "use std::hint::black_box;");
+        assert_eq!(lines_mut[2], "use core::hint::black_box;");
         assert_eq!(lines_mut[3], "fn foo() {}");
     }
 }

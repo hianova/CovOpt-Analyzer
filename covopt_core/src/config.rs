@@ -66,6 +66,7 @@ pub struct CovOptConfig {
     pub target: Vec<TargetConfig>,
     #[serde(default)]
     pub pipeline: PipelineConfig,
+    pub macro_path: Option<String>,
 }
 
 impl CovOptConfig {
