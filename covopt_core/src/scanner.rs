@@ -167,11 +167,42 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let config = crate::config::CovOptConfig::load(".covopt.toml").ok();
     let macro_path = config.and_then(|c| c.macro_path).unwrap_or_else(|| "covopt_macro::covopt_param".to_string());
 
+    let mut crate_no_std_cache: std::collections::HashMap<std::path::PathBuf, bool> = std::collections::HashMap::new();
+
     for file_path in files_to_scan {
         if let Ok(content) = fs::read_to_string(&file_path) {
-            let is_no_std = content.contains("#![no_std]");
+            let mut is_no_std = content.contains("#![no_std]");
+            
+            if !is_no_std {
+                let mut current = file_path.parent();
+                while let Some(dir) = current {
+                    let cargo_toml = dir.join("Cargo.toml");
+                    if cargo_toml.exists() {
+                        if let Some(&cached_is_no_std) = crate_no_std_cache.get(dir) {
+                            is_no_std = cached_is_no_std;
+                        } else {
+                            let lib_rs = dir.join("src").join("lib.rs");
+                            let main_rs = dir.join("src").join("main.rs");
+                            let mut crate_has_no_std = false;
+                            for root_file in &[lib_rs, main_rs] {
+                                if let Ok(root_content) = fs::read_to_string(root_file) {
+                                    if root_content.contains("#![no_std]") {
+                                        crate_has_no_std = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            crate_no_std_cache.insert(dir.to_path_buf(), crate_has_no_std);
+                            is_no_std = crate_has_no_std;
+                        }
+                        break; // Stop going up once we hit a Cargo.toml (the closest crate root)
+                    }
+                    current = dir.parent();
+                }
+            }
+
             if is_no_std && macro_path == "covopt_macro::covopt_param" {
-                println!("  [Skip] {} (no_std detected, requires custom macro_path)", file_path.display());
+                println!("  [Skip] {} (no_std detected in crate root, requires custom macro_path)", file_path.display());
                 continue;
             }
             if let Ok(syntax_tree) = syn::parse_file(&content) {
