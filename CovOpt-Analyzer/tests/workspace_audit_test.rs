@@ -1,4 +1,4 @@
-use covopt_core::runner::check_workspace;
+use CovOpt_Analyzer::runner::check_workspace;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;

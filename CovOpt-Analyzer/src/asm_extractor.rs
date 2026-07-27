@@ -30,9 +30,9 @@ impl AsmExtractor {
             if fs::read_to_string(&manifest_path).is_ok_and(|c| {
                 c.contains("[workspace]")
                     && !c.contains("[package]")
-                    && c.contains("\"covopt_core\"")
+                    && c.contains("\"CovOpt-Analyzer\"")
             }) {
-                cmd.arg("-p").arg("covopt_core");
+                cmd.arg("-p").arg("CovOpt-Analyzer");
             }
         }
         cmd.args(["--", "--emit=asm"]);
@@ -72,7 +72,7 @@ impl AsmExtractor {
 
         // We look for a label that contains our demangled function name
         // Assembly labels usually look like:
-        // _ZN15covopt_analyzer...:
+        // _ZN15CovOpt-Analyzer...:
         for s_file in all_s_files {
             if let Ok(content) = fs::read_to_string(&s_file) {
                 let mut in_target_func = false;

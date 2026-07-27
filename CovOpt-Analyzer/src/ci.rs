@@ -1,6 +1,6 @@
 use crate::harden;
 use crate::{CiArgs, commands};
-use covopt_core::config::CovOptConfig;
+use CovOpt_Analyzer::config::CovOptConfig;
 use covopt_macro::covopt_param;
 
 pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -22,18 +22,18 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
             std::env::set_var("COVOPT_NON_INTERACTIVE", "1");
         }
         commands::run_fix(args.base.clone());
-        covopt_core::scanner::run_scan(args.base.clone(), true, false);
+        CovOpt_Analyzer::scanner::run_scan(args.base.clone(), true, false);
         println!("✅ [CI OK] Fix complete.");
     }
 
-    if let Err(e) = covopt_core::runner::check_workspace() {
+    if let Err(e) = CovOpt_Analyzer::runner::check_workspace() {
         eprintln!("❌ [CI Failed] Workspace compilation failed:\n{}", e);
         std::process::exit(1);
     }
 
     if config.pipeline.run_audit {
         println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit(&covopt_core::config::AuditArgs {
+        commands::run_audit(&CovOpt_Analyzer::config::AuditArgs {
             test: None,
             fast: args.fast,
             json: false,

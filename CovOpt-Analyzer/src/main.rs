@@ -7,7 +7,7 @@ pub mod explore;
 pub mod harden;
 
 use clap::{Parser, Subcommand};
-use covopt_core::config::{
+use CovOpt_Analyzer::config::{
     AdviseArgs, AuditArgs, CiArgs, FixArgs, HardenArgs, InitArgs, ProfileArgs, ReportArgs, RunArgs,
 };
 
@@ -73,7 +73,7 @@ fn main() {
                 commands::run_fix(args.path.clone());
             }
             if args.only_magic || run_all {
-                covopt_core::scanner::run_scan(args.path, true, false);
+                CovOpt_Analyzer::scanner::run_scan(args.path, true, false);
             }
         }
         Some(Commands::Report(args)) => {
@@ -90,7 +90,7 @@ fn main() {
         }
         Some(Commands::Audit(args)) => commands::run_audit(&args),
         Some(Commands::Profile(args)) => {
-            if !covopt_core::profiler::run_profile(
+            if !CovOpt_Analyzer::profiler::run_profile(
                 args.test.as_deref(),
                 args.bin.as_deref(),
                 &args.tool,
@@ -103,7 +103,7 @@ fn main() {
                 eprintln!("CovOpt Error: {:?}", e);
                 std::process::exit(1);
             }
-            covopt_core::dataflow::run_dataflow(Some(args.path.clone()));
+            CovOpt_Analyzer::dataflow::run_dataflow(Some(args.path.clone()));
         }
         Some(Commands::Harden(args)) => {
             if args.generate_harness {
@@ -174,7 +174,7 @@ fn main() {
             }
         }
         Some(Commands::Ci(args)) => {
-            let config = match covopt_core::config::CovOptConfig::load(".covopt.toml") {
+            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!(
