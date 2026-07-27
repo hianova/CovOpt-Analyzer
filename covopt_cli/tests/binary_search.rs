@@ -15,7 +15,11 @@ pub fn compute_binary_search(n: usize) {
 }
 
 #[cfg(test)]
-#[covopt_test(target_fn = "compute_binary_search", expected = "O(log N)", n_values = "1000,5000,10000")]
+#[covopt_test(
+    target_fn = "compute_binary_search",
+    expected = "O(log N)",
+    n_values = "1000,5000,10000"
+)]
 fn binary_search(n: usize) {
     compute_binary_search(n);
 }

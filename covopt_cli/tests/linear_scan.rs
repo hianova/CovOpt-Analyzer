@@ -12,7 +12,11 @@ pub fn compute_linear_scan(n: usize) -> usize {
 }
 
 #[cfg(test)]
-#[covopt_test(target_fn = "compute_linear_scan", expected = "O(N)", n_values = "1000,5000,10000")]
+#[covopt_test(
+    target_fn = "compute_linear_scan",
+    expected = "O(N)",
+    n_values = "1000,5000,10000"
+)]
 fn linear_scan(n: usize) {
     compute_linear_scan(n);
 }

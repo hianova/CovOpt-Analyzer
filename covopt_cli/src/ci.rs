@@ -1,6 +1,6 @@
-use covopt_core::config::CovOptConfig;
 use crate::harden;
 use crate::{CiArgs, commands};
+use covopt_core::config::CovOptConfig;
 use covopt_macro::covopt_param;
 
 pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -9,13 +9,18 @@ pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn s
     println!("===================================================");
 
     if let Some(ref base) = args.base {
-        println!("▶️ Base branch specified: {}. Restricting analysis to modified files.", base);
+        println!(
+            "▶️ Base branch specified: {}. Restricting analysis to modified files.",
+            base
+        );
     }
 
     // Step 1: Clean & Format (Fix)
     if config.pipeline.run_fix {
         println!("Step 1: Running Auto-Fix (cargo clippy --fix & magic numbers)...");
-        unsafe { std::env::set_var("COVOPT_NON_INTERACTIVE", "1"); }
+        unsafe {
+            std::env::set_var("COVOPT_NON_INTERACTIVE", "1");
+        }
         commands::run_fix(args.base.clone());
         covopt_core::scanner::run_scan(args.base.clone(), true, false);
         println!("✅ [CI OK] Fix complete.");

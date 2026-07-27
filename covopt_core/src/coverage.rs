@@ -169,10 +169,10 @@ impl CoverageMap {
                     if let Some(src_line) = lines.get(i)
                         && (src_line.contains("covopt::ignore")
                             || src_line.contains("cfg_attr(covopt, ignore)"))
-                        {
-                            should_ignore = true;
-                            break;
-                        }
+                    {
+                        should_ignore = true;
+                        break;
+                    }
                 }
                 if should_ignore {
                     continue;

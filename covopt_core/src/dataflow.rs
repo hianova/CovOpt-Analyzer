@@ -96,16 +96,17 @@ impl<'ast> Visit<'ast> for DataflowScanner {
 pub fn analyze_file(file_path: &Path) -> Vec<String> {
     let mut all_warnings = Vec::new();
     if let Ok(content) = fs::read_to_string(file_path)
-        && let Ok(syntax_tree) = syn::parse_file(&content) {
-            let mut scanner = DataflowScanner {
-                file_path: file_path.to_string_lossy().into_owned(),
-                func_name: String::new(),
-                loop_depth: 0,
-                warnings: Vec::new(),
-            };
-            scanner.visit_file(&syntax_tree);
-            all_warnings = scanner.warnings;
-        }
+        && let Ok(syntax_tree) = syn::parse_file(&content)
+    {
+        let mut scanner = DataflowScanner {
+            file_path: file_path.to_string_lossy().into_owned(),
+            func_name: String::new(),
+            loop_depth: 0,
+            warnings: Vec::new(),
+        };
+        scanner.visit_file(&syntax_tree);
+        all_warnings = scanner.warnings;
+    }
     all_warnings
 }
 
@@ -114,7 +115,10 @@ pub fn run_dataflow(path: Option<String>) {
     let mut files_to_scan = Vec::new();
     crate::scanner::collect_rs_files(Path::new(&start_dir), &mut files_to_scan);
 
-    println!("CovOpt-Analyzer: Running Data-Flow & Taint Analysis on {}...", start_dir);
+    println!(
+        "CovOpt-Analyzer: Running Data-Flow & Taint Analysis on {}...",
+        start_dir
+    );
     let mut total_warnings = 0;
 
     for file in files_to_scan {

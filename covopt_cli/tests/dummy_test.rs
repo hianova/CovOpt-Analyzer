@@ -12,7 +12,11 @@ pub fn compute_dummy_algorithm(n: usize) -> usize {
 }
 
 #[cfg(test)]
-#[covopt_test(target_fn = "compute_dummy_algorithm", expected = "O(N)", n_values = "1000,5000,10000")]
+#[covopt_test(
+    target_fn = "compute_dummy_algorithm",
+    expected = "O(N)",
+    n_values = "1000,5000,10000"
+)]
 fn dummy_algorithm(n: usize) {
     compute_dummy_algorithm(n);
 }

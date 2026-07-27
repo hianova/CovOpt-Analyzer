@@ -154,5 +154,3 @@ pub fn covopt_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
-
-

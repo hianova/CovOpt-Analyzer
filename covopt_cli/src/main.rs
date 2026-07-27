@@ -8,13 +8,15 @@ pub mod harden;
 
 use clap::{Parser, Subcommand};
 use covopt_core::config::{
-    RunArgs, InitArgs, CiArgs, ReportArgs, FixArgs, AuditArgs, AdviseArgs, ProfileArgs, HardenArgs
+    AdviseArgs, AuditArgs, CiArgs, FixArgs, HardenArgs, InitArgs, ProfileArgs, ReportArgs, RunArgs,
 };
 
 #[derive(Parser, Debug)]
 #[command(name = "covopt")]
 #[command(author, version, about = "Coverage-based Complexity & Safety Analyzer")]
-#[command(after_help = "EXAMPLES:\n  1. Quick setup:          covopt init\n  2. Audit codebase:       covopt audit\n  3. Auto-fix & optimize:  covopt fix\n  4. Senior Advisor:       covopt advise\n  5. Profile CPU hotspots: covopt profile --test my_test\n  6. Auto-Pilot Pipeline:  covopt ci")]
+#[command(
+    after_help = "EXAMPLES:\n  1. Quick setup:          covopt init\n  2. Audit codebase:       covopt audit\n  3. Auto-fix & optimize:  covopt fix\n  4. Senior Advisor:       covopt advise\n  5. Profile CPU hotspots: covopt profile --test my_test\n  6. Auto-Pilot Pipeline:  covopt ci"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -88,7 +90,11 @@ fn main() {
         }
         Some(Commands::Audit(args)) => commands::run_audit(&args),
         Some(Commands::Profile(args)) => {
-            if !covopt_core::profiler::run_profile(args.test.as_deref(), args.bin.as_deref(), &args.tool) {
+            if !covopt_core::profiler::run_profile(
+                args.test.as_deref(),
+                args.bin.as_deref(),
+                &args.tool,
+            ) {
                 std::process::exit(1);
             }
         }
@@ -110,7 +116,9 @@ fn main() {
                 let test = match &args.test {
                     Some(t) => t,
                     None => {
-                        eprintln!("Error: The name of the test target is required when running hardening tests.");
+                        eprintln!(
+                            "Error: The name of the test target is required when running hardening tests."
+                        );
                         std::process::exit(1);
                     }
                 };

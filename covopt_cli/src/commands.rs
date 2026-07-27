@@ -1,8 +1,8 @@
+use crate::*;
 use covopt_core::analyzer::ConvergenceAnalyzer;
 use covopt_core::config::CovOptConfig;
 use covopt_core::mca::McaRunner;
 use covopt_core::runner::CargoTestRunner;
-use crate::*;
 use covopt_macro::covopt_param;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,8 +22,6 @@ fn parse_complexity(s: &str) -> Option<Complexity> {
         _ => None,
     }
 }
-
-
 
 struct LogBuffer {
     buffer: String,
@@ -70,7 +68,7 @@ pub fn run_analysis(
     let mut ast_expected = None;
     let mut ast_n_values = None;
     let mut ast_target_fn = None;
-    
+
     if let Some((e, n, t, _)) = covopt_core::static_analysis::find_covopt_test_metadata(test_name) {
         ast_expected = Some(e);
         ast_n_values = Some(n);
@@ -104,7 +102,11 @@ pub fn run_analysis(
     let expected = match parse_complexity(expected_str) {
         Some(c) => c,
         None => {
-            wlog!(log, "[ERROR] Unknown complexity format: {}. Valid formats include O1, ON, ON2, etc.", expected_str);
+            wlog!(
+                log,
+                "[ERROR] Unknown complexity format: {}. Valid formats include O1, ON, ON2, etc.",
+                expected_str
+            );
             return false;
         }
     };
@@ -126,7 +128,8 @@ pub fn run_analysis(
         exes.to_vec()
     } else {
         let mut packages_to_compile = Vec::new();
-        if let Some(pkg) = covopt_core::static_analysis::resolve_package_for_target(test_name, None) {
+        if let Some(pkg) = covopt_core::static_analysis::resolve_package_for_target(test_name, None)
+        {
             packages_to_compile.push(pkg);
         }
         match covopt_core::runner::compile_workspace_tests(&output_dir, &packages_to_compile) {
@@ -198,18 +201,33 @@ pub fn run_analysis(
                 ignore_patterns.extend(ig_str.split(',').map(|s| s.trim().to_string()));
             }
 
-            // [NEW] Dominant Complexity Auto-Detection! 
+            // [NEW] Dominant Complexity Auto-Detection!
             // By passing ast_target_fn, we restrict the peak search to the target function,
             // finding the dynamically hottest path (dominant bottleneck) automatically.
-            if let Some((f, l, sym, _)) = map.find_peak_location(&ignore_patterns, ast_target_fn.as_deref()) {
+            if let Some((f, l, sym, _)) =
+                map.find_peak_location(&ignore_patterns, ast_target_fn.as_deref())
+            {
                 discovered_target_file = Some(f.clone());
                 discovered_target_line = Some(l);
                 target_symbol = Some(sym.clone());
-                
+
                 if let Some(ref t_fn) = ast_target_fn {
-                    wlog!(log, "Auto-discovered dominant target in {}: {}:{} ({})", t_fn, f, l, sym);
+                    wlog!(
+                        log,
+                        "Auto-discovered dominant target in {}: {}:{} ({})",
+                        t_fn,
+                        f,
+                        l,
+                        sym
+                    );
                 } else {
-                    wlog!(log, "Auto-discovered global peak target: {}:{} ({})", f, l, sym);
+                    wlog!(
+                        log,
+                        "Auto-discovered global peak target: {}:{} ({})",
+                        f,
+                        l,
+                        sym
+                    );
                 }
             } else {
                 wlog!(log, "DEBUG: find_peak_location returned None");
@@ -367,8 +385,9 @@ pub fn run_analysis(
 
     let mut static_aerospace_grade = None;
     if args.require_aerospace_grade {
-        let violations =
-            covopt_core::static_analysis::analyze_aerospace_grade(std::path::Path::new(&target_file));
+        let violations = covopt_core::static_analysis::analyze_aerospace_grade(
+            std::path::Path::new(&target_file),
+        );
         static_aerospace_grade = Some(violations.clone());
         if violations.is_empty() {
             wlog!(log, "Static Aerospace Grade: Passed");
@@ -388,7 +407,9 @@ pub fn run_analysis(
     let mut static_watchdog_timeout = None;
     if args.require_watchdog_timeout {
         let (has_watchdog, applicable) =
-            covopt_core::static_analysis::analyze_project_watchdog_timeout(std::path::Path::new(&target_file));
+            covopt_core::static_analysis::analyze_project_watchdog_timeout(std::path::Path::new(
+                &target_file,
+            ));
         static_watchdog_timeout = Some(has_watchdog);
         if applicable {
             if has_watchdog {
@@ -411,8 +432,9 @@ pub fn run_analysis(
 
     let mut static_stress_test = None;
     if args.require_stress_test {
-        let (has_stress, applicable) =
-            covopt_core::static_analysis::analyze_project_stress_test(std::path::Path::new(&target_file));
+        let (has_stress, applicable) = covopt_core::static_analysis::analyze_project_stress_test(
+            std::path::Path::new(&target_file),
+        );
         static_stress_test = Some(has_stress);
         if applicable {
             if has_stress {
@@ -541,13 +563,13 @@ pub fn run_analysis(
                                 mca_report.block_rthroughput
                             );
                             wlog!(log, "IPC:               {:.2}", mca_report.ipc);
-                            
+
                             covopt_core::cache::save_mca_cache(
                                 std::path::Path::new(&target_file),
                                 &symbol,
                                 &mca_report,
                             );
-                            
+
                             mca_stats = Some((mca_report.ipc, mca_report.block_rthroughput));
                         }
                         Err(e) => wlog!(log, "LLVM-MCA failed: {}", e),
@@ -631,7 +653,11 @@ pub fn run_analysis(
 
     if success {
         if compact {
-            wlog!(log, "\n> [x] CovOpt Analysis PASSED (Target: {})", target_file);
+            wlog!(
+                log,
+                "\n> [x] CovOpt Analysis PASSED (Target: {})",
+                target_file
+            );
             wlog!(
                 log,
                 "  - Time Complexity: {:?} (Expected: {:?})",
@@ -931,12 +957,12 @@ require_stress_test = true
 
 pub fn run_fix(path: Option<String>) {
     println!("CovOpt-Analyzer: Running CodeMender-Style Sandbox Auto-Fix...");
-    
+
     // We need to gather the files that will be affected to back them up
     // In a real CodeMender, we'd parse the diff. For now, we'll assume the path is the target
     let target_dir = std::env::current_dir().unwrap();
     let sandbox = covopt_core::sandbox::Sandbox::new(target_dir.clone());
-    
+
     // Collect target files (all .rs files in path or src/)
     let search_path = path.clone().unwrap_or_else(|| "src/".to_string());
     let mut target_files = Vec::new();
@@ -946,7 +972,7 @@ pub fn run_fix(path: Option<String>) {
             target_files.push(p.to_path_buf());
         }
     }
-    
+
     let fix_fn = || -> Result<(), String> {
         let mut args = vec![
             "clippy",
@@ -961,18 +987,18 @@ pub fn run_fix(path: Option<String>) {
         args.push("--");
         args.push("-A");
         args.push("unused_imports");
-        
+
         let path_str = path.clone().unwrap_or_default();
         if path.is_some() {
             // cargo clippy actually doesn't take paths directly, but if this was here we append it
             args.push(&path_str);
         }
-        
+
         let status = std::process::Command::new("cargo")
             .args(&args)
             .status()
             .map_err(|e| e.to_string())?;
-            
+
         if !status.success() {
             return Err("cargo clippy --fix failed".to_string());
         }
@@ -989,18 +1015,18 @@ pub fn run_fix(path: Option<String>) {
 pub fn get_git_diff_files(staged: bool, branch: Option<&str>) -> Vec<String> {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("diff").arg("--name-only");
-    
+
     if staged {
         cmd.arg("--cached");
     } else if let Some(b) = branch {
         cmd.arg(format!("{}...HEAD", b));
     }
-    
+
     let output = cmd.output().expect("Failed to run git diff");
     if !output.status.success() {
         return vec![];
     }
-    
+
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| l.ends_with(".rs"))
@@ -1016,7 +1042,10 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
 
     if staged {
         let diff_files = get_git_diff_files(true, None);
-        eprintln!("[Git Incremental Audit] Auditing staged files only ({} modified .rs file(s) found).", diff_files.len());
+        eprintln!(
+            "[Git Incremental Audit] Auditing staged files only ({} modified .rs file(s) found).",
+            diff_files.len()
+        );
     }
 
     unsafe {
@@ -1038,7 +1067,10 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
     };
 
     if let Err(e) = covopt_core::runner::check_workspace() {
-        eprintln!("\n[AUDIT FAILED] Workspace compilation check failed:\n{}", e);
+        eprintln!(
+            "\n[AUDIT FAILED] Workspace compilation check failed:\n{}",
+            e
+        );
         std::process::exit(1);
     }
 
@@ -1050,11 +1082,11 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
         if let Some(pkg) = covopt_core::static_analysis::resolve_package_for_target(
             &target.test,
             target.package.as_ref(),
-        )
-            && !packages_to_compile.contains(&pkg) {
-                eprintln!("Resolved test '{}' to package '{}'", target.test, pkg);
-                packages_to_compile.push(pkg);
-            }
+        ) && !packages_to_compile.contains(&pkg)
+        {
+            eprintln!("Resolved test '{}' to package '{}'", target.test, pkg);
+            packages_to_compile.push(pkg);
+        }
     }
 
     if packages_to_compile.is_empty() {
@@ -1066,14 +1098,16 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
         );
     }
 
-    let workspace_executables =
-        match covopt_core::runner::compile_workspace_tests(&global_output_dir, &packages_to_compile) {
-            Ok(exes) => exes,
-            Err(e) => {
-                eprintln!("Failed to compile workspace tests: {}", e);
-                std::process::exit(1);
-            }
-        };
+    let workspace_executables = match covopt_core::runner::compile_workspace_tests(
+        &global_output_dir,
+        &packages_to_compile,
+    ) {
+        Ok(exes) => exes,
+        Err(e) => {
+            eprintln!("Failed to compile workspace tests: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     let mut json_results = serde_json::json!({
         "status": "success",
@@ -1083,20 +1117,20 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
 
     for mut target in config.target {
         if let Some(tt) = &target_test
-            && &target.test != tt {
-                continue;
+            && &target.test != tt
+        {
+            continue;
+        }
+        if fast && let Some(n_vals) = &target.n_values {
+            let parts: Vec<&str> = n_vals.split(',').collect();
+            if parts.len() > 2 {
+                target.n_values = Some(format!(
+                    "{},{}",
+                    parts.first().unwrap(),
+                    parts.last().unwrap()
+                ));
             }
-        if fast
-            && let Some(n_vals) = &target.n_values {
-                let parts: Vec<&str> = n_vals.split(',').collect();
-                if parts.len() > 2 {
-                    target.n_values = Some(format!(
-                        "{},{}",
-                        parts.first().unwrap(),
-                        parts.last().unwrap()
-                    ));
-                }
-            }
+        }
         let args = RunArgs {
             test: Some(target.test.clone()),
             expected: target.expected.clone(),
@@ -1155,33 +1189,31 @@ pub fn run_audit(args: &covopt_core::config::AuditArgs) {
             && let Some(arr) = json_results
                 .get_mut("targets")
                 .and_then(|t| t.as_array_mut())
-            {
-                
-                let sandbox = covopt_core::sandbox::Sandbox::new(std::env::current_dir().unwrap());
-                // For target.test, we try to get metrics
-                let mut ipc = 0.0;
-                let mut peak_rss = 0;
-                if let Ok(metrics) = sandbox.measure_metrics(Some(&target.test)) {
-                    ipc = metrics.ipc.unwrap_or(0.0);
-                    peak_rss = metrics.peak_rss;
-                }
-                
-                arr.push(serde_json::json!({
-                    "test": target.test,
-                    "entropy": {
-                        "fuzz_variance": entropy_result.fuzz_variance_score,
-                        "branch_sprawl": entropy_result.branch_sprawl_score,
-                        "cli_noise": entropy_result.cli_noise_score,
-                        "total": entropy_result.total_score
-                    },
-                    "performance": {
-                        "ipc": ipc,
-                        "peak_rss": peak_rss
-                    },
-                    "passed": entropy_result.total_score <= 50.0
-                }));
-
+        {
+            let sandbox = covopt_core::sandbox::Sandbox::new(std::env::current_dir().unwrap());
+            // For target.test, we try to get metrics
+            let mut ipc = 0.0;
+            let mut peak_rss = 0;
+            if let Ok(metrics) = sandbox.measure_metrics(Some(&target.test)) {
+                ipc = metrics.ipc.unwrap_or(0.0);
+                peak_rss = metrics.peak_rss;
             }
+
+            arr.push(serde_json::json!({
+                "test": target.test,
+                "entropy": {
+                    "fuzz_variance": entropy_result.fuzz_variance_score,
+                    "branch_sprawl": entropy_result.branch_sprawl_score,
+                    "cli_noise": entropy_result.cli_noise_score,
+                    "total": entropy_result.total_score
+                },
+                "performance": {
+                    "ipc": ipc,
+                    "peak_rss": peak_rss
+                },
+                "passed": entropy_result.total_score <= 50.0
+            }));
+        }
     }
 
     if is_json {
@@ -1369,7 +1401,7 @@ pub fn run_advise(args: &crate::AdviseArgs) -> Result<(), String> {
 
                 let mut asm_block_size = None;
                 let mut mca_report_opt = covopt_core::cache::load_mca_cache(&file_path, &name);
-                
+
                 if mca_report_opt.is_some() {
                     // Cache Hit
                 } else if let Some(ref asm_extractor) = asm_extractor_opt

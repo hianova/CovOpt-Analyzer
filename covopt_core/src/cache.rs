@@ -51,35 +51,53 @@ pub fn compute_file_hash(path: &Path) -> u64 {
 }
 
 pub fn save_mca_cache(file_path: &Path, symbol: &str, report: &McaReport) {
-    let file_key = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf()).to_string_lossy().into_owned();
+    let file_key = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
     let hash = compute_file_hash(file_path);
     let mut proj_cache = ProjectCache::load();
-    let file_cache = proj_cache.files.entry(file_key).or_insert_with(|| AdviseCache {
-        file_hash: hash,
-        mca_reports: HashMap::new(),
-    });
+    let file_cache = proj_cache
+        .files
+        .entry(file_key)
+        .or_insert_with(|| AdviseCache {
+            file_hash: hash,
+            mca_reports: HashMap::new(),
+        });
     // If the file changed, invalidate old reports
     if file_cache.file_hash != hash {
         file_cache.file_hash = hash;
         file_cache.mca_reports.clear();
     }
-    file_cache.mca_reports.insert(symbol.to_string(), report.clone());
+    file_cache
+        .mca_reports
+        .insert(symbol.to_string(), report.clone());
     proj_cache.save();
 }
 
 pub fn load_mca_cache(file_path: &Path, symbol: &str) -> Option<McaReport> {
-    let file_key = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf()).to_string_lossy().into_owned();
+    let file_key = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
     let hash = compute_file_hash(file_path);
     let proj_cache = ProjectCache::load();
     if let Some(file_cache) = proj_cache.files.get(&file_key)
-        && file_cache.file_hash == hash {
-            return file_cache.mca_reports.get(symbol).cloned();
-        }
+        && file_cache.file_hash == hash
+    {
+        return file_cache.mca_reports.get(symbol).cloned();
+    }
     None
 }
 
 pub fn is_file_cache_valid(file_path: &Path) -> bool {
-    let file_key = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf()).to_string_lossy().into_owned();
+    let file_key = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
     let hash = compute_file_hash(file_path);
     let proj_cache = ProjectCache::load();
     if let Some(file_cache) = proj_cache.files.get(&file_key) {

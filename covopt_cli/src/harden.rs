@@ -288,7 +288,7 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
 
         let arch = std::env::consts::ARCH;
         let os = std::env::consts::OS;
-        
+
         let target = match (arch, os) {
             ("aarch64", "macos") => "aarch64-apple-darwin",
             ("x86_64", "macos") => "x86_64-apple-darwin",
@@ -302,7 +302,10 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
                 "x86_64-pc-windows-msvc"
             }
             _ => {
-                eprintln!("Unsupported architecture or OS for sanitizers: {}-{}", arch, os);
+                eprintln!(
+                    "Unsupported architecture or OS for sanitizers: {}-{}",
+                    arch, os
+                );
                 return false;
             }
         };

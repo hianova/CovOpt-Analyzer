@@ -133,7 +133,12 @@ impl CoverageRunner {
 pub fn check_workspace() -> Result<(), String> {
     let mut cmd = Command::new("cargo");
     cmd.env("RUSTFLAGS", "--cap-lints warn");
-    cmd.args(["check", "--workspace", "--all-targets", "--message-format=json"]);
+    cmd.args([
+        "check",
+        "--workspace",
+        "--all-targets",
+        "--message-format=json",
+    ]);
 
     if !crate::config::should_color() {
         cmd.arg("--color=never");
@@ -148,14 +153,20 @@ pub fn check_workspace() -> Result<(), String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut rustc_errors = String::new();
         for line in stdout.lines() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(msg) = v.get("message").and_then(|m| m.get("rendered")).and_then(|r| r.as_str()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(msg) = v
+                    .get("message")
+                    .and_then(|m| m.get("rendered"))
+                    .and_then(|r| r.as_str())
+                {
                     rustc_errors.push_str(msg);
                     rustc_errors.push('\n');
                 }
-            }
         }
-        return Err(format!("Workspace compilation failed.\n{}\n{}", stderr, rustc_errors));
+        return Err(format!(
+            "Workspace compilation failed.\n{}\n{}",
+            stderr, rustc_errors
+        ));
     }
 
     Ok(())
@@ -172,7 +183,10 @@ pub fn compile_workspace_tests(
 
     let mut cmd = Command::new("cargo");
     cmd.env("RUSTFLAGS", "-C instrument-coverage --cap-lints warn")
-        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1finstrument-coverage\x1f--cap-lints\x1fwarn")
+        .env(
+            "CARGO_ENCODED_RUSTFLAGS",
+            "-C\x1finstrument-coverage\x1f--cap-lints\x1fwarn",
+        )
         .env(
             "LLVM_PROFILE_FILE",
             output_dir.join("default_%m_%p.profraw"),
@@ -205,14 +219,20 @@ pub fn compile_workspace_tests(
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut rustc_errors = String::new();
         for line in stdout.lines() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(msg) = v.get("message").and_then(|m| m.get("rendered")).and_then(|r| r.as_str()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(msg) = v
+                    .get("message")
+                    .and_then(|m| m.get("rendered"))
+                    .and_then(|r| r.as_str())
+                {
                     rustc_errors.push_str(msg);
                     rustc_errors.push('\n');
                 }
-            }
         }
-        if stderr.contains("Operation not permitted") || stderr.contains("Permission denied") || stderr.contains("os error 1") {
+        if stderr.contains("Operation not permitted")
+            || stderr.contains("Permission denied")
+            || stderr.contains("os error 1")
+        {
             return Err(format!(
                 "Compilation failed: {}\n{}\n[Hint] Permission error detected while accessing toolchain files (e.g. ~/.rustup). If running inside an isolated sandbox, try using `--bypass-sandbox` or check permissions.",
                 stderr, rustc_errors
@@ -248,12 +268,14 @@ pub fn compile_workspace_tests(
             && let Some(exe) = v.get("executable").and_then(|e| e.as_str())
         {
             // Exclude proc-macro binaries (which fail with dyld error on macOS)
-            let is_proc_macro = v.get("target")
+            let is_proc_macro = v
+                .get("target")
                 .and_then(|t| t.get("kind"))
                 .and_then(|k| k.as_array())
                 .is_some_and(|kinds| {
                     kinds.iter().any(|k| {
-                        k.as_str().is_some_and(|s| s.contains("proc-macro") || s.contains("proc_macro"))
+                        k.as_str()
+                            .is_some_and(|s| s.contains("proc-macro") || s.contains("proc_macro"))
                     })
                 })
                 || v.get("target")
@@ -261,7 +283,9 @@ pub fn compile_workspace_tests(
                     .and_then(|k| k.as_array())
                     .is_some_and(|types| {
                         types.iter().any(|t| {
-                            t.as_str().is_some_and(|s| s.contains("proc-macro") || s.contains("proc_macro"))
+                            t.as_str().is_some_and(|s| {
+                                s.contains("proc-macro") || s.contains("proc_macro")
+                            })
                         })
                     })
                 || exe.contains("covopt_macro")
@@ -832,7 +856,10 @@ fn main() {
     #[test]
     fn test_check_workspace() {
         let res = check_workspace();
-        assert!(res.is_ok(), "check_workspace should succeed on healthy codebase: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "check_workspace should succeed on healthy codebase: {:?}",
+            res.err()
+        );
     }
 }
-

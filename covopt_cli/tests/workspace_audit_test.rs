@@ -6,7 +6,11 @@ use tempfile::tempdir;
 #[test]
 fn test_check_workspace_succeeds_on_valid_workspace() {
     let result = check_workspace();
-    assert!(result.is_ok(), "Expected check_workspace() to succeed on healthy workspace, got: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Expected check_workspace() to succeed on healthy workspace, got: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -30,9 +34,17 @@ edition = "2021"
 
     let output = Command::new("cargo")
         .current_dir(temp_dir.path())
-        .args(["check", "--workspace", "--all-targets", "--message-format=json"])
+        .args([
+            "check",
+            "--workspace",
+            "--all-targets",
+            "--message-format=json",
+        ])
         .output()
         .unwrap();
 
-    assert!(!output.status.success(), "Expected cargo check --workspace to fail on invalid syntax");
+    assert!(
+        !output.status.success(),
+        "Expected cargo check --workspace to fail on invalid syntax"
+    );
 }

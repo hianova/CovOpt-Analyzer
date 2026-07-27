@@ -47,7 +47,11 @@ fn is_diagnostic_ignored(msg: &serde_json::Value) -> bool {
         }
         let primary_spans: Vec<_> = spans
             .iter()
-            .filter(|s| s.get("is_primary").and_then(|b| b.as_bool()).unwrap_or(false))
+            .filter(|s| {
+                s.get("is_primary")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false)
+            })
             .collect();
 
         if !primary_spans.is_empty() {
@@ -96,7 +100,12 @@ pub fn parse_cli_noise_from_json(stdout: &str) -> (usize, f64) {
 fn compute_cli_noise(details: &mut String) -> f64 {
     let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
     let output = Command::new("cargo")
-        .args(["check", "--workspace", "--all-targets", "--message-format=json"])
+        .args([
+            "check",
+            "--workspace",
+            "--all-targets",
+            "--message-format=json",
+        ])
         .output();
 
     let (warning_count, score) = if let Ok(output) = output {
@@ -291,7 +300,10 @@ mod tests {
 
         let (count, score) = parse_cli_noise_from_json(json_data);
         assert_eq!(count, 1, "Only warning in src/lib.rs should be counted");
-        assert!((score - 2.0).abs() < f64::EPSILON, "Score should be 2.0 for 1 warning");
+        assert!(
+            (score - 2.0).abs() < f64::EPSILON,
+            "Score should be 2.0 for 1 warning"
+        );
     }
 
     #[test]
@@ -300,8 +312,13 @@ mod tests {
 {"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"examples/bar.rs","is_primary":true}]}}"#;
 
         let (count, score) = parse_cli_noise_from_json(json_data);
-        assert_eq!(count, 0, "Warnings in tests/ and examples/ should be excluded");
-        assert!((score - 0.0).abs() < f64::EPSILON, "Score should be 0.0 when all diagnostics are ignored");
+        assert_eq!(
+            count, 0,
+            "Warnings in tests/ and examples/ should be excluded"
+        );
+        assert!(
+            (score - 0.0).abs() < f64::EPSILON,
+            "Score should be 0.0 when all diagnostics are ignored"
+        );
     }
 }
-

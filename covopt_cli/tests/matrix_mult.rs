@@ -13,7 +13,11 @@ pub fn compute_matrix_mult(n: usize) -> usize {
 }
 
 #[cfg(test)]
-#[covopt_test(target_fn = "compute_matrix_mult", expected = "O(N^2)", n_values = "50,100,200")]
+#[covopt_test(
+    target_fn = "compute_matrix_mult",
+    expected = "O(N^2)",
+    n_values = "50,100,200"
+)]
 fn matrix_mult(n: usize) {
     compute_matrix_mult(n);
 }

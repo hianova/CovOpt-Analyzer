@@ -12,7 +12,11 @@ pub fn compute_merge_sort(n: usize) {
 }
 
 #[cfg(test)]
-#[covopt_test(target_fn = "compute_merge_sort", expected = "O(N log N)", n_values = "100,500,1000")]
+#[covopt_test(
+    target_fn = "compute_merge_sort",
+    expected = "O(N log N)",
+    n_values = "100,500,1000"
+)]
 fn merge_sort(n: usize) {
     compute_merge_sort(n);
 }

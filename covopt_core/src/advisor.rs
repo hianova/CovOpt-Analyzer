@@ -90,7 +90,6 @@ impl EncapsulationAdvisor {
             ));
         }
 
-
         if visitor.simd_opportunities > 0 {
             warnings.push(format!(
                 "[Rule 9: Portable SIMD Vectorization] Found {} numeric loops operating on slices. In Rust 1.90+, use `std::simd::Simd<T, N>` lanes to manually auto-vectorize this loop and dramatically multiply Instructions Per Cycle (IPC).",
@@ -241,7 +240,10 @@ struct SeniorEngineerVisitor {
 impl<'ast> Visit<'ast> for SeniorEngineerVisitor {
     fn visit_expr_for_loop(&mut self, i: &'ast ExprForLoop) {
         let body_str = quote::quote!(#i).to_string();
-        if body_str.contains("[") && body_str.contains("]") && (body_str.contains("+=") || body_str.contains("*=") || body_str.contains("-=")) {
+        if body_str.contains("[")
+            && body_str.contains("]")
+            && (body_str.contains("+=") || body_str.contains("*=") || body_str.contains("-="))
+        {
             self.simd_opportunities += 1;
         }
 

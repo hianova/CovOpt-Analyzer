@@ -148,6 +148,4 @@ mod tests {
         scanner.visit_file(&syntax_tree);
         assert_eq!(scanner.targets.len(), 0);
     }
-
 }
-

@@ -3,17 +3,21 @@ use std::process::{Command, exit};
 
 fn main() {
     let mut args: Vec<String> = env::args().collect();
-    
+
     // When invoked as `cargo covopt`, the second argument is the subcommand "covopt".
     // We strip it so the underlying `covopt` binary gets the correct arguments.
     if args.len() > 1 && args[1] == "covopt" {
         args.remove(1);
     }
-    
+
     // The `covopt` executable should be sitting right next to `cargo-covopt`
     let mut exe_path = env::current_exe().expect("Failed to get current executable path");
-    exe_path.set_file_name(if cfg!(windows) { "covopt.exe" } else { "covopt" });
-    
+    exe_path.set_file_name(if cfg!(windows) {
+        "covopt.exe"
+    } else {
+        "covopt"
+    });
+
     // Fallback: If for some reason covopt isn't next to us, assume it's in PATH
     let cmd = if exe_path.exists() {
         exe_path.to_string_lossy().to_string()

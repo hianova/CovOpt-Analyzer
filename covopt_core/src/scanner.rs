@@ -117,37 +117,42 @@ impl<'ast> Visit<'ast> for MagicNumberScanner {
     }
 }
 
-
 pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let start_dir = path.unwrap_or_else(|| ".".to_string());
-    
+
     if restore {
         let backup_dir = Path::new(".covopt_backup");
         if backup_dir.exists() {
             println!("Restoring files from .covopt_backup/...");
             let mut restored = 0;
-            
-            fn restore_recursive(current_dir: &Path, base_backup: &Path, base_target: &Path, count: &mut usize) {
+
+            fn restore_recursive(
+                current_dir: &Path,
+                base_backup: &Path,
+                base_target: &Path,
+                count: &mut usize,
+            ) {
                 if let Ok(entries) = fs::read_dir(current_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.is_dir() {
                             restore_recursive(&path, base_backup, base_target, count);
                         } else if path.is_file()
-                            && let Ok(relative) = path.strip_prefix(base_backup) {
-                                let target = base_target.join(relative);
-                                if let Some(parent) = target.parent() {
-                                    let _ = fs::create_dir_all(parent);
-                                }
-                                if fs::copy(&path, &target).is_ok() {
-                                    println!("Restored: {}", target.display());
-                                    *count += 1;
-                                }
+                            && let Ok(relative) = path.strip_prefix(base_backup)
+                        {
+                            let target = base_target.join(relative);
+                            if let Some(parent) = target.parent() {
+                                let _ = fs::create_dir_all(parent);
                             }
+                            if fs::copy(&path, &target).is_ok() {
+                                println!("Restored: {}", target.display());
+                                *count += 1;
+                            }
+                        }
                     }
                 }
             }
-            
+
             restore_recursive(backup_dir, backup_dir, Path::new(&start_dir), &mut restored);
             let _ = fs::remove_dir_all(backup_dir);
             println!("✅ Successfully restored {} files.", restored);
@@ -165,14 +170,17 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
     let mut total_fixed = 0;
 
     let config = crate::config::CovOptConfig::load(".covopt.toml").ok();
-    let macro_path = config.and_then(|c| c.macro_path).unwrap_or_else(|| "covopt_macro::covopt_param".to_string());
+    let macro_path = config
+        .and_then(|c| c.macro_path)
+        .unwrap_or_else(|| "covopt_macro::covopt_param".to_string());
 
-    let mut crate_no_std_cache: std::collections::HashMap<std::path::PathBuf, bool> = std::collections::HashMap::new();
+    let mut crate_no_std_cache: std::collections::HashMap<std::path::PathBuf, bool> =
+        std::collections::HashMap::new();
 
     for file_path in files_to_scan {
         if let Ok(content) = fs::read_to_string(&file_path) {
             let mut is_no_std = content.contains("#![no_std]");
-            
+
             if !is_no_std {
                 let mut current = file_path.parent();
                 while let Some(dir) = current {
@@ -184,22 +192,20 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
                             let lib_rs = dir.join("src").join("lib.rs");
                             let main_rs = dir.join("src").join("main.rs");
                             let mut crate_has_no_std = false;
-                            
+
                             // Check if it's a proc-macro crate (which we should also skip)
-                            if let Ok(toml_content) = fs::read_to_string(&cargo_toml) {
-                                if toml_content.contains("proc-macro = true") {
+                            if let Ok(toml_content) = fs::read_to_string(&cargo_toml)
+                                && toml_content.contains("proc-macro = true") {
                                     crate_has_no_std = true;
                                 }
-                            }
 
                             if !crate_has_no_std {
                                 for root_file in &[lib_rs, main_rs] {
-                                    if let Ok(root_content) = fs::read_to_string(root_file) {
-                                        if root_content.contains("#![no_std]") {
+                                    if let Ok(root_content) = fs::read_to_string(root_file)
+                                        && root_content.contains("#![no_std]") {
                                             crate_has_no_std = true;
                                             break;
                                         }
-                                    }
                                 }
                             }
                             crate_no_std_cache.insert(dir.to_path_buf(), crate_has_no_std);
@@ -212,121 +218,136 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) {
             }
 
             if is_no_std && macro_path == "covopt_macro::covopt_param" {
-                println!("  [Skip] {} (no_std detected in crate root, requires custom macro_path)", file_path.display());
+                println!(
+                    "  [Skip] {} (no_std detected in crate root, requires custom macro_path)",
+                    file_path.display()
+                );
                 continue;
             }
             if let Ok(syntax_tree) = syn::parse_file(&content) {
-            let mut scanner = MagicNumberScanner {
-                file_path: file_path.to_string_lossy().to_string(),
-                found_magics: Vec::new(),
-            };
-            scanner.visit_file(&syntax_tree);
+                let mut scanner = MagicNumberScanner {
+                    file_path: file_path.to_string_lossy().to_string(),
+                    found_magics: Vec::new(),
+                };
+                scanner.visit_file(&syntax_tree);
 
-            if !scanner.found_magics.is_empty() {
-                println!("\n[{}]", scanner.file_path);
+                if !scanner.found_magics.is_empty() {
+                    println!("\n[{}]", scanner.file_path);
 
-                // Sort by line, then column, descending, to safely rewrite
-                scanner.found_magics.sort_by_key(|b| std::cmp::Reverse(b.0));
+                    // Sort by line, then column, descending, to safely rewrite
+                    scanner.found_magics.sort_by_key(|b| std::cmp::Reverse(b.0));
 
-                let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-                let mut file_changed = false;
-                let mut abort_scan = false;
+                    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                    let mut file_changed = false;
+                    let mut abort_scan = false;
 
-                for (start_loc, end_loc, val) in scanner.found_magics {
-                    if abort_scan { break; }
-                    let line_idx = start_loc.line - 1;
-                    if auto_fix && line_idx < lines.len() && start_loc.line == end_loc.line {
-                        let line_str = &mut lines[line_idx];
-                        let start_col = start_loc.column;
-                        let end_col = end_loc.column;
+                    for (start_loc, end_loc, val) in scanner.found_magics {
+                        if abort_scan {
+                            break;
+                        }
+                        let line_idx = start_loc.line - 1;
+                        if auto_fix && line_idx < lines.len() && start_loc.line == end_loc.line {
+                            let line_str = &mut lines[line_idx];
+                            let start_col = start_loc.column;
+                            let end_col = end_loc.column;
 
-                        let replacement = format!(
-                            "{}!(\"M_{}_{}\", {})",
-                            macro_path, start_loc.line, start_loc.column, val
-                        );
+                            let replacement = format!(
+                                "{}!(\"M_{}_{}\", {})",
+                                macro_path, start_loc.line, start_loc.column, val
+                            );
 
-                        if start_col <= end_col && end_col <= line_str.len() {
-                            let old_line = line_str.clone();
-                            let mut new_line = line_str.clone();
-                            new_line.replace_range(start_col..end_col, &replacement);
-                            
-                            println!("  Line {}: Found magic number `{}`", start_loc.line, val);
-                            println!("- {}", old_line.trim_start());
-                            println!("+ {}", new_line.trim_start());
-                            
-                            use std::io::IsTerminal;
-                            let is_non_interactive = !std::io::stdout().is_terminal()
-                                || std::env::var("COVOPT_NON_INTERACTIVE").is_ok()
-                                || std::env::var("CI").is_ok();
-                            
-                            let mut apply = is_non_interactive;
-                            if !is_non_interactive {
-                                loop {
-                                    use std::io::{self, Write};
-                                    print!("Apply this fix? [y]es / [n]o / [q]uit: ");
-                                    let _ = io::stdout().flush();
-                                    let mut input = String::new();
-                                    let _ = io::stdin().read_line(&mut input);
-                                    match input.trim().to_lowercase().as_str() {
-                                        "y" | "yes" => { apply = true; break; }
-                                        "n" | "no" => { apply = false; break; }
-                                        "q" | "quit" => { abort_scan = true; break; }
-                                        _ => println!("Invalid input."),
+                            if start_col <= end_col && end_col <= line_str.len() {
+                                let old_line = line_str.clone();
+                                let mut new_line = line_str.clone();
+                                new_line.replace_range(start_col..end_col, &replacement);
+
+                                println!("  Line {}: Found magic number `{}`", start_loc.line, val);
+                                println!("- {}", old_line.trim_start());
+                                println!("+ {}", new_line.trim_start());
+
+                                use std::io::IsTerminal;
+                                let is_non_interactive = !std::io::stdout().is_terminal()
+                                    || std::env::var("COVOPT_NON_INTERACTIVE").is_ok()
+                                    || std::env::var("CI").is_ok();
+
+                                let mut apply = is_non_interactive;
+                                if !is_non_interactive {
+                                    loop {
+                                        use std::io::{self, Write};
+                                        print!("Apply this fix? [y]es / [n]o / [q]uit: ");
+                                        let _ = io::stdout().flush();
+                                        let mut input = String::new();
+                                        let _ = io::stdin().read_line(&mut input);
+                                        match input.trim().to_lowercase().as_str() {
+                                            "y" | "yes" => {
+                                                apply = true;
+                                                break;
+                                            }
+                                            "n" | "no" => {
+                                                apply = false;
+                                                break;
+                                            }
+                                            "q" | "quit" => {
+                                                abort_scan = true;
+                                                break;
+                                            }
+                                            _ => println!("Invalid input."),
+                                        }
                                     }
                                 }
-                            }
-                            
-                            if apply {
-                                *line_str = new_line;
-                                file_changed = true;
-                                total_fixed += 1;
-                                println!("    -> Fixed.");
+
+                                if apply {
+                                    *line_str = new_line;
+                                    file_changed = true;
+                                    total_fixed += 1;
+                                    println!("    -> Fixed.");
+                                } else {
+                                    println!("    -> Skipped.");
+                                }
                             } else {
-                                println!("    -> Skipped.");
+                                println!(
+                                    "  Line {}: Found magic number `{}` (auto-fix failed due to offset mismatch)",
+                                    start_loc.line, val
+                                );
                             }
                         } else {
-                            println!(
-                                "  Line {}: Found magic number `{}` (auto-fix failed due to offset mismatch)",
-                                start_loc.line, val
-                            );
+                            println!("  Line {}: Found magic number `{}`", start_loc.line, val);
                         }
-                    } else {
-                        println!("  Line {}: Found magic number `{}`", start_loc.line, val);
-                    }
-                    total_found += 1;
-                }
-                
-                if abort_scan {
-                    println!("Aborting scan as requested.");
-                }
-
-                if file_changed {
-                    // Backup the original file before modifying
-                    let backup_base = Path::new(".covopt_backup");
-                    let file_path_obj = Path::new(&file_path);
-                    let backup_path = if let Ok(relative) = file_path_obj.strip_prefix(Path::new(&start_dir)) {
-                        backup_base.join(relative)
-                    } else {
-                        backup_base.join(file_path_obj.file_name().unwrap())
-                    };
-                    
-                    if let Some(parent) = backup_path.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    if !backup_path.exists() {
-                        let _ = fs::copy(&file_path, &backup_path);
+                        total_found += 1;
                     }
 
+                    if abort_scan {
+                        println!("Aborting scan as requested.");
+                    }
 
-                    if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
-                        eprintln!("Failed to write {}: {}", file_path.display(), e);
+                    if file_changed {
+                        // Backup the original file before modifying
+                        let backup_base = Path::new(".covopt_backup");
+                        let file_path_obj = Path::new(&file_path);
+                        let backup_path = if let Ok(relative) =
+                            file_path_obj.strip_prefix(Path::new(&start_dir))
+                        {
+                            backup_base.join(relative)
+                        } else {
+                            backup_base.join(file_path_obj.file_name().unwrap())
+                        };
+
+                        if let Some(parent) = backup_path.parent() {
+                            let _ = fs::create_dir_all(parent);
+                        }
+                        if !backup_path.exists() {
+                            let _ = fs::copy(&file_path, &backup_path);
+                        }
+
+                        if let Err(e) = fs::write(&file_path, lines.join("\n") + "\n") {
+                            eprintln!("Failed to write {}: {}", file_path.display(), e);
+                        }
+                    }
+
+                    if abort_scan {
+                        break;
                     }
                 }
-                
-                if abort_scan {
-                    break;
-                }
-            }
             }
         }
     }
@@ -374,7 +395,10 @@ pub fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
             } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 let is_in_proc_macro = path.components().any(|c| {
                     let s = c.as_os_str().to_string_lossy();
-                    s == "covopt-macro" || s == "covopt_macro" || s.contains("proc-macro") || s.contains("proc_macro")
+                    s == "covopt-macro"
+                        || s == "covopt_macro"
+                        || s.contains("proc-macro")
+                        || s.contains("proc_macro")
                 });
                 if !is_in_proc_macro {
                     files.push(path);
@@ -419,22 +443,46 @@ mod tests {
         };
         scanner.visit_file(&syntax_tree);
 
-        let found_vals: Vec<&str> = scanner.found_magics.iter().map(|(_, _, val)| val.as_str()).collect();
+        let found_vals: Vec<&str> = scanner
+            .found_magics
+            .iter()
+            .map(|(_, _, val)| val.as_str())
+            .collect();
 
         // 42 (static), 100 (const), 50 (const fn), 10 & 20 (enum discriminants), 123 (pat arm) must NOT be scanned.
-        assert!(!found_vals.contains(&"42"), "Static item magic number 42 should be skipped");
-        assert!(!found_vals.contains(&"100"), "Const item magic number 100 should be skipped");
-        assert!(!found_vals.contains(&"50"), "Const fn magic number 50 should be skipped");
-        assert!(!found_vals.contains(&"10"), "Enum discriminant 10 should be skipped");
-        assert!(!found_vals.contains(&"20"), "Enum discriminant 20 should be skipped");
-        assert!(!found_vals.contains(&"123"), "Pattern arm magic number 123 should be skipped");
+        assert!(
+            !found_vals.contains(&"42"),
+            "Static item magic number 42 should be skipped"
+        );
+        assert!(
+            !found_vals.contains(&"100"),
+            "Const item magic number 100 should be skipped"
+        );
+        assert!(
+            !found_vals.contains(&"50"),
+            "Const fn magic number 50 should be skipped"
+        );
+        assert!(
+            !found_vals.contains(&"10"),
+            "Enum discriminant 10 should be skipped"
+        );
+        assert!(
+            !found_vals.contains(&"20"),
+            "Enum discriminant 20 should be skipped"
+        );
+        assert!(
+            !found_vals.contains(&"123"),
+            "Pattern arm magic number 123 should be skipped"
+        );
 
         // 999 and 888 in regular function body SHOULD be found
-        assert!(found_vals.contains(&"999"), "Regular fn body magic number 999 should be found");
-        assert!(found_vals.contains(&"888"), "Regular fn body magic number 888 should be found");
+        assert!(
+            found_vals.contains(&"999"),
+            "Regular fn body magic number 999 should be found"
+        );
+        assert!(
+            found_vals.contains(&"888"),
+            "Regular fn body magic number 888 should be found"
+        );
     }
-
-
 }
-
-

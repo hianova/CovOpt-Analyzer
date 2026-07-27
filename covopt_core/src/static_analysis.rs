@@ -642,8 +642,7 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     }
     if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
         violations.push(
-            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`."
-                .to_string(),
+            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
         );
     }
 
@@ -770,7 +769,7 @@ pub fn analyze_project_stress_test(target_file: &Path) -> (bool, bool) {
     if has_stress || !applicable {
         return (has_stress, applicable);
     }
-    
+
     let tests_dir = Path::new("tests");
     if tests_dir.exists() && tests_dir.is_dir() {
         let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_stress_test);
@@ -786,7 +785,7 @@ pub fn analyze_project_watchdog_timeout(target_file: &Path) -> (bool, bool) {
     if has_wd || !applicable {
         return (has_wd, applicable);
     }
-    
+
     let tests_dir = Path::new("tests");
     if tests_dir.exists() && tests_dir.is_dir() {
         let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_watchdog_timeout);
@@ -858,7 +857,9 @@ pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
     item_fn.sig.inputs.len()
 }
 
-pub fn parse_covopt_attr_tokens(token_str: &str) -> (Option<String>, Option<String>, Option<String>) {
+pub fn parse_covopt_attr_tokens(
+    token_str: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
     let mut expected = None;
     let mut n_values = None;
     let mut target_fn = None;
@@ -904,7 +905,11 @@ fn clean_expected_str(val: &str) -> String {
 }
 
 fn clean_n_values_str(val: &str) -> String {
-    let trimmed = val.trim().trim_matches('"').trim_matches('[').trim_matches(']');
+    let trimmed = val
+        .trim()
+        .trim_matches('"')
+        .trim_matches('[')
+        .trim_matches(']');
     trimmed
         .split(',')
         .map(|item| item.trim())
@@ -917,7 +922,9 @@ fn clean_generic_str(val: &str) -> String {
     val.trim().trim_matches('"').to_string()
 }
 
-pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Option<String>, PathBuf)> {
+pub fn find_covopt_test_metadata(
+    test_name: &str,
+) -> Option<(String, String, Option<String>, PathBuf)> {
     let walker = walkdir::WalkDir::new(".")
         .into_iter()
         .filter_entry(|e| {
@@ -929,36 +936,50 @@ pub fn find_covopt_test_metadata(test_name: &str) -> Option<(String, String, Opt
     for entry in walker {
         if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
             && let Ok(content) = fs::read_to_string(entry.path())
-                && let Ok(ast) = syn::parse_file(&content) {
-                    for item in ast.items {
-                        if let syn::Item::Fn(item_fn) = item
-                            && item_fn.sig.ident == test_name {
-                                for attr in &item_fn.attrs {
-                                    let path_str = attr
-                                        .path()
-                                        .segments
-                                        .iter()
-                                        .map(|s| s.ident.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join("::");
-                                    if (path_str == "covopt::test"
-                                        || path_str == "test"
-                                        || path_str == "covopt_macro::test"
-                                        || path_str == "covopt_macro::covopt_test"
-                                        || path_str == "covopt_test")
-                                        && let syn::Meta::List(list) = &attr.meta {
-                                            let token_str = list.tokens.to_string();
-                                            let (expected, n_values, target_fn) = parse_covopt_attr_tokens(&token_str);
-                                            if expected.is_some() || n_values.is_some() || target_fn.is_some() {
-                                                let exp = expected.unwrap_or_else(|| covopt_macro::covopt_param!("COVOPT_DEFAULT_EXPECTED", "O(1)".to_string()));
-                                                let n_val = n_values.unwrap_or_else(|| covopt_macro::covopt_param!("COVOPT_DEFAULT_N_VALUES", "1,100,1000".to_string()));
-                                                return Some((exp, n_val, target_fn, entry.path().to_path_buf()));
-                                            }
-                                        }
-                                }
+            && let Ok(ast) = syn::parse_file(&content)
+        {
+            for item in ast.items {
+                if let syn::Item::Fn(item_fn) = item
+                    && item_fn.sig.ident == test_name
+                {
+                    for attr in &item_fn.attrs {
+                        let path_str = attr
+                            .path()
+                            .segments
+                            .iter()
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        if (path_str == "covopt::test"
+                            || path_str == "test"
+                            || path_str == "covopt_macro::test"
+                            || path_str == "covopt_macro::covopt_test"
+                            || path_str == "covopt_test")
+                            && let syn::Meta::List(list) = &attr.meta
+                        {
+                            let token_str = list.tokens.to_string();
+                            let (expected, n_values, target_fn) =
+                                parse_covopt_attr_tokens(&token_str);
+                            if expected.is_some() || n_values.is_some() || target_fn.is_some() {
+                                let exp = expected.unwrap_or_else(|| {
+                                    covopt_macro::covopt_param!(
+                                        "COVOPT_DEFAULT_EXPECTED",
+                                        "O(1)".to_string()
+                                    )
+                                });
+                                let n_val = n_values.unwrap_or_else(|| {
+                                    covopt_macro::covopt_param!(
+                                        "COVOPT_DEFAULT_N_VALUES",
+                                        "1,100,1000".to_string()
+                                    )
+                                });
+                                return Some((exp, n_val, target_fn, entry.path().to_path_buf()));
                             }
+                        }
                     }
                 }
+            }
+        }
     }
     None
 }
@@ -969,11 +990,12 @@ pub fn find_package_for_file(path: &Path) -> Option<String> {
         let cargo_toml = dir.join("Cargo.toml");
         if cargo_toml.exists()
             && let Ok(content) = fs::read_to_string(&cargo_toml)
-                && let Ok(value) = content.parse::<toml::Value>()
-                    && let Some(pkg) = value.get("package")
-                        && let Some(name) = pkg.get("name").and_then(|n| n.as_str()) {
-                            return Some(name.to_string());
-                        }
+            && let Ok(value) = content.parse::<toml::Value>()
+            && let Some(pkg) = value.get("package")
+            && let Some(name) = pkg.get("name").and_then(|n| n.as_str())
+        {
+            return Some(name.to_string());
+        }
         current_dir = dir.parent();
     }
     None
@@ -987,9 +1009,10 @@ pub fn resolve_package_for_target(
         return Some(pkg.clone());
     }
     if let Some((_, _, _, path)) = find_covopt_test_metadata(test_name)
-        && let Some(pkg) = find_package_for_file(&path) {
-            return Some(pkg);
-        }
+        && let Some(pkg) = find_package_for_file(&path)
+    {
+        return Some(pkg);
+    }
     None
 }
 
@@ -1030,8 +1053,14 @@ pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
                     });
 
                     if let Some(attr) = covopt_attr {
-                        let mut expected = covopt_macro::covopt_param!("COVOPT_DEFAULT_EXPECTED", "O(1)".to_string());
-                        let mut n_values = covopt_macro::covopt_param!("COVOPT_DEFAULT_N_VALUES", "1,100,1000".to_string());
+                        let mut expected = covopt_macro::covopt_param!(
+                            "COVOPT_DEFAULT_EXPECTED",
+                            "O(1)".to_string()
+                        );
+                        let mut n_values = covopt_macro::covopt_param!(
+                            "COVOPT_DEFAULT_N_VALUES",
+                            "1,100,1000".to_string()
+                        );
 
                         if let syn::Meta::List(meta) = &attr.meta {
                             let tokens = meta.tokens.to_string();
@@ -1075,8 +1104,14 @@ pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
                         if has_test_attr {
                             results.push((
                                 item_fn.sig.ident.to_string(),
-                                covopt_macro::covopt_param!("COVOPT_FALLBACK_EXPECTED", "O(1)".to_string()),
-                                covopt_macro::covopt_param!("COVOPT_FALLBACK_N_VALUES", "1,100,1000".to_string()),
+                                covopt_macro::covopt_param!(
+                                    "COVOPT_FALLBACK_EXPECTED",
+                                    "O(1)".to_string()
+                                ),
+                                covopt_macro::covopt_param!(
+                                    "COVOPT_FALLBACK_N_VALUES",
+                                    "1,100,1000".to_string()
+                                ),
                             ));
                         }
                     }

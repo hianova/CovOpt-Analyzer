@@ -209,7 +209,6 @@ pub struct CiArgs {
     pub sarif: bool,
 }
 
-
 #[derive(clap::Args, Debug, Clone)]
 pub struct FixArgs {
     /// Optional path to scan and fix (defaults to current directory)
@@ -223,7 +222,6 @@ pub struct FixArgs {
     #[arg(long, default_value_t = false)]
     pub only_magic: bool,
 }
-
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct ProfileArgs {

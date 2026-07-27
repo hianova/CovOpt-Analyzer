@@ -77,7 +77,8 @@ mod tests {
 
         let timeout_secs = covopt_param!("SPIN_TIMEOUT_SECS", 5);
         assert!(
-            rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)).is_ok(),
+            rx.recv_timeout(std::time::Duration::from_secs(timeout_secs))
+                .is_ok(),
             "Detected Spin Deadlock or extreme starvation under high contention!"
         );
 

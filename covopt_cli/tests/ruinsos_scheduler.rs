@@ -16,7 +16,11 @@ pub fn schedule_task(queue: &mut VecDeque<ThreadTask>, task: ThreadTask) {
 use covopt_macro::covopt_test;
 
 #[cfg(test)]
-#[covopt_test(target_fn = "schedule_task", expected = "O(1)", n_values = "1,100,1000")]
+#[covopt_test(
+    target_fn = "schedule_task",
+    expected = "O(1)",
+    n_values = "1,100,1000"
+)]
 fn ruinsos_scheduler(n: usize) {
     let mut sum = 0;
     for i in black_box(0..n) {
