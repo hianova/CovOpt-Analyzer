@@ -14,7 +14,7 @@ This crate is designed to be used in conjunction with the `CovOpt-Analyzer` CLI.
 Add it to your `Cargo.toml`:
 ```toml
 [dev-dependencies]
-covopt-macro = "2.0.0-beta.1"
+covopt-macro = "2.0.0"
 ```
 
 ### Example

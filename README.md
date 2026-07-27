@@ -27,7 +27,7 @@ rustup component add llvm-tools-preview
 Add to `Cargo.toml`:
 ```toml
 [dev-dependencies]
-covopt-macro = "1.1"
+covopt-macro = "2.0.0"
 ```
 
 In your tests:

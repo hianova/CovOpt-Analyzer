@@ -1,4 +1,4 @@
-## 🤖 AI Agent & Piping Integration
+# 🤖 AI Agent & Piping Integration
 
 CovOpt is designed for Unix command chaining and AI Agent workflows.
 

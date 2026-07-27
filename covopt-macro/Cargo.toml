@@ -1,6 +1,6 @@
 [package]
 name = "covopt-macro"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 edition = "2024"
 description = "Lightweight parameter tuning and complexity testing macros for CovOpt-Analyzer"
 license = "MIT"

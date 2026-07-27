@@ -1,4 +1,4 @@
-## 🛠️ Architecture & Tech Stack
+# 🛠️ Architecture & Tech Stack
 
 CovOpt-Analyzer is built with a high-performance, modular Rust architecture:
 

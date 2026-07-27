@@ -1,6 +1,6 @@
 [package]
 name = "CovOpt-Analyzer"
-version = "2.0.0-beta.1"
+version = "2.0.0"
 edition = "2024"
 description = "A Coverage-Optimized Complexity Analyzer and Auto-Tuning engine for Rust."
 license = "MIT"
@@ -21,7 +21,7 @@ name = "cargo-covopt"
 path = "src/bin/cargo_covopt.rs"
 
 [dependencies]
-covopt-macro = { version = "2.0.0-beta.1", path = "../covopt-macro" }
+covopt-macro = { version = "2.0.0", path = "../covopt-macro" }
 clap = { version = "4.5.31", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
