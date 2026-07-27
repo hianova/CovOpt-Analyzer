@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 pub mod auto_fixer;
 pub mod auto_harness;
 pub mod ci;

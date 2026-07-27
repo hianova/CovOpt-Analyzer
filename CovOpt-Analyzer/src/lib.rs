@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 pub mod advisor;
 pub mod analyzer;
 pub mod asm_extractor;
