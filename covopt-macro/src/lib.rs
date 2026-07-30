@@ -154,3 +154,116 @@ pub fn covopt_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+struct QsbrRegistryInput {
+    vis: syn::Visibility,
+    ident: syn::Ident,
+    node_type: syn::Path,
+    register: syn::Path,
+    unregister: Option<syn::Path>,
+}
+
+impl syn::parse::Parse for QsbrRegistryInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let vis: syn::Visibility = input.parse()?;
+        input.parse::<syn::Token![struct]>()?;
+        let ident: syn::Ident = input.parse()?;
+        input.parse::<syn::Token![;]>()?;
+        
+        let mut node_type = None;
+        let mut register = None;
+        let mut unregister = None;
+        
+        while !input.is_empty() {
+            let kw: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            let p: syn::Path = input.parse()?;
+            input.parse::<syn::Token![;]>()?;
+            
+            if kw == "node_type" {
+                node_type = Some(p);
+            } else if kw == "register" {
+                register = Some(p);
+            } else if kw == "unregister" {
+                unregister = Some(p);
+            } else {
+                return Err(syn::Error::new(kw.span(), "Unknown keyword, expected node_type, register, or unregister"));
+            }
+        }
+        
+        let node_type = node_type.ok_or_else(|| input.error("Missing node_type"))?;
+        let register = register.ok_or_else(|| input.error("Missing register"))?;
+        
+        Ok(QsbrRegistryInput {
+            vis,
+            ident,
+            node_type,
+            register,
+            unregister,
+        })
+    }
+}
+
+/// Generates an automatic QSBR TLS registry and Guard.
+#[proc_macro]
+pub fn covopt_qsbr_registry(input: TokenStream) -> TokenStream {
+    let parsed = syn::parse_macro_input!(input as QsbrRegistryInput);
+    
+    let vis = parsed.vis;
+    let ident = parsed.ident;
+    let node_type = parsed.node_type;
+    let register = parsed.register;
+    let unregister_code = match parsed.unregister {
+        Some(unreg) => quote! {
+            unsafe { #unreg(self.node); }
+        },
+        None => quote! {}
+    };
+    
+    let tl_name = syn::Ident::new(&format!("__COVOPT_{}_GUARD", ident), ident.span());
+    let wrapper_name = syn::Ident::new(&format!("__CovOptQsbrTlsWrapper_{}", ident), ident.span());
+    
+    let expanded = quote! {
+        std::thread_local! {
+            static #tl_name: #wrapper_name = #wrapper_name::new();
+        }
+        
+        struct #wrapper_name {
+            node: *mut #node_type,
+        }
+        
+        impl #wrapper_name {
+            fn new() -> Self {
+                let node = unsafe {
+                    let layout = core::alloc::Layout::new::<#node_type>();
+                    let ptr = std::alloc::alloc_zeroed(layout) as *mut #node_type;
+                    core::ptr::write(ptr, #node_type::new());
+                    #register(ptr);
+                    ptr
+                };
+                Self { node }
+            }
+        }
+        
+        impl Drop for #wrapper_name {
+            fn drop(&mut self) {
+                #unregister_code
+                unsafe {
+                    let layout = core::alloc::Layout::new::<#node_type>();
+                    std::alloc::dealloc(self.node as *mut u8, layout);
+                }
+            }
+        }
+        
+        #vis struct #ident;
+        
+        impl #ident {
+            #[inline(always)]
+            pub fn pin() -> *mut #node_type {
+                #tl_name.with(|g| g.node)
+            }
+        }
+    };
+    
+    TokenStream::from(expanded)
+}
