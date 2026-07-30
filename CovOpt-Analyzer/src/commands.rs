@@ -647,7 +647,7 @@ pub fn run_analysis(
         );
         wlog!(
             log,
-            "=> SUGGESTION: Introduce an adaptive sleep (`std::thread::sleep`), Exponential Backoff, or an OS Yield (`core::hint::spin_loop()` is NOT enough to prevent heating) inside the empty polling branch."
+            "=> SUGGESTION: If this is a polling loop, introduce an adaptive sleep (`std::thread::sleep`) or Exponential Backoff. If this is a large array/buffer initialization, DO NOT use a `for` loop with `.push()`; use `vec![value; N]` or `Iterator::collect()` to leverage LLVM `memset` optimizations."
         );
     }
 

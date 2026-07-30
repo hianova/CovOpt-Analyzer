@@ -6,10 +6,11 @@ pub mod commands;
 pub mod dashboard;
 pub mod explore;
 pub mod harden;
+pub mod concurrency_fuzzer;
 
 use clap::{Parser, Subcommand};
 use CovOpt_Analyzer::config::{
-    AdviseArgs, AuditArgs, CiArgs, FixArgs, HardenArgs, InitArgs, ProfileArgs, ReportArgs, RunArgs,
+    AdviseArgs, AuditArgs, CiArgs, FixArgs, FuzzArgs, HardenArgs, InitArgs, ProfileArgs, ReportArgs, RunArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -51,6 +52,9 @@ pub enum Commands {
 
     /// Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers)
     Harden(HardenArgs),
+
+    /// Adversarial Concurrency Fuzzer (AST-based In-Process Heuristic Fuzzing)
+    Fuzz(FuzzArgs),
 }
 
 fn main() {
@@ -200,6 +204,12 @@ fn main() {
                     eprintln!("CovOpt Error generating report: {:?}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+        Some(Commands::Fuzz(args)) => {
+            if let Err(e) = concurrency_fuzzer::run_fuzzer(&args) {
+                eprintln!("Fuzzer Error: {}", e);
+                std::process::exit(1);
             }
         }
         None => {

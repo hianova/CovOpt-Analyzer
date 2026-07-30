@@ -239,6 +239,21 @@ pub struct ProfileArgs {
 }
 
 #[derive(clap::Args, Debug, Clone)]
+pub struct FuzzArgs {
+    /// The target test file to perform concurrency fuzzing on
+    #[arg(short, long)]
+    pub target: String,
+
+    /// Timeout in milliseconds to detect deadlocks
+    #[arg(long, default_value_t = 50)]
+    pub timeout_ms: u64,
+
+    /// Max number of iterations for the in-process fuzzer
+    #[arg(long, default_value_t = 1000000)]
+    pub max_iters: usize,
+}
+
+#[derive(clap::Args, Debug, Clone)]
 #[command(next_help_heading = "Default Run Mode Options")]
 pub struct RunArgs {
     /// The name of the test to run

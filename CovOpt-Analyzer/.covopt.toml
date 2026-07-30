@@ -1,0 +1,60 @@
+[[target]]
+test = "ruinsos_scheduler"
+expected = "O(1)"
+n_values = "1,100,1000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "matrix_mult"
+expected = "O(N^2)"
+n_values = "50,100,200"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "merge_sort"
+expected = "O(N log N)"
+n_values = "100,500,1000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "binary_search"
+expected = "O(log N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "dummy_algorithm"
+expected = "O(N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "linear_scan"
+expected = "O(N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+

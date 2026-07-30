@@ -144,6 +144,8 @@ pub fn analyze_variables(source_file: &Path, target_line: usize) -> usize {
 struct ThreadActivityVisitor {
     spawned_vars: Vec<String>,
     joined_vars: Vec<String>,
+    spawn_count: usize,
+    inline_join_count: usize,
     has_spawn: bool,
     has_join: bool,
     has_mutex: bool,
@@ -186,6 +188,7 @@ impl<'ast> Visit<'ast> for ThreadActivityVisitor {
             && segment.ident == "spawn"
         {
             self.has_spawn = true;
+            self.spawn_count += 1;
         }
         syn::visit::visit_expr_call(self, node);
     }
@@ -198,9 +201,20 @@ impl<'ast> Visit<'ast> for ThreadActivityVisitor {
                 && let Some(seg) = expr_path.path.segments.last()
             {
                 self.joined_vars.push(seg.ident.to_string());
-            }
+            } else if let syn::Expr::Call(call) = &*node.receiver {
+                if let syn::Expr::Path(expr_path) = &*call.func
+                    && let Some(seg) = expr_path.path.segments.last()
+                    && seg.ident == "spawn"
+                {
+                    self.inline_join_count += 1;
+                }
+            } else if let syn::Expr::MethodCall(mcall) = &*node.receiver
+                && mcall.method == "spawn" {
+                    self.inline_join_count += 1;
+                }
         } else if name == "spawn" {
             self.has_spawn = true;
+            self.spawn_count += 1;
         }
         syn::visit::visit_expr_method_call(self, node);
     }
@@ -277,6 +291,8 @@ pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
     let mut visitor = ThreadActivityVisitor {
         spawned_vars: Vec::new(),
         joined_vars: Vec::new(),
+        spawn_count: 0,
+        inline_join_count: 0,
         has_spawn: false,
         has_join: false,
         has_mutex: false,
@@ -290,13 +306,13 @@ pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
     if visitor.has_spawn {
         let mut complete = false;
         if visitor.has_join {
-            if visitor.spawned_vars.is_empty() {
-                // e.g. `thread::spawn(...).join()`
-                complete = true;
+            if visitor.spawn_count > visitor.inline_join_count + visitor.spawned_vars.len() {
+                complete = false;
             } else {
+                complete = true;
                 for var in &visitor.spawned_vars {
-                    if visitor.joined_vars.contains(var) {
-                        complete = true;
+                    if !visitor.joined_vars.contains(var) {
+                        complete = false;
                         break;
                     }
                 }
