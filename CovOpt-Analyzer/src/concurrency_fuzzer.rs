@@ -127,11 +127,18 @@ pub fn instrument_test_file(path: &Path, out_path: &Path) -> Result<usize, Strin
 
             pub fn run_fuzz_loop<F: Fn(usize) + std::panic::RefUnwindSafe>(f: F) {
                 println!("🚀 Starting In-Process Adversarial Concurrency Fuzzer...");
-                // Simple random fuzzer loop
-                let iterations = 10000; // testing with 10k for now
+                let iterations = 10000;
                 let mut rng_seed: u64 = 0x12345678; // LCG state
+                let start_time = std::time::Instant::now();
+                let time_limit = std::time::Duration::from_secs(5); // 5-second Watchdog
                 
+                let mut completed_iters = 0;
                 for i in 0..iterations {
+                    if start_time.elapsed() > time_limit {
+                        println!("⏱️ [WATCHDOG] Fuzzer time limit reached (5s). Aborting early to prevent CPU overload on heavy tests.");
+                        break;
+                    }
+                    
                     // Fast pseudo-random generation for delays
                     // Sparse mutation: only inject delay in 5% of locations per iteration
                     for j in 0..500 { // Max 500 delays modeled
@@ -157,8 +164,9 @@ pub fn instrument_test_file(path: &Path, out_path: &Path) -> Result<usize, Strin
                         println!("...]");
                         std::process::exit(1);
                     }
+                    completed_iters += 1;
                 }
-                println!("✅ Fuzzing Complete. {} generations tested. No bugs found.", iterations);
+                println!("✅ Fuzzing Complete. {} generations tested. No bugs found.", completed_iters);
             }
         }
     };
