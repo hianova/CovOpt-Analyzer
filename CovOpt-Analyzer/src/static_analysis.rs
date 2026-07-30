@@ -354,12 +354,18 @@ struct CachePaddingVisitor {
 
 impl<'ast> Visit<'ast> for CachePaddingVisitor {
     fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-        self.has_structs_or_enums = true;
+        let tokens = quote::quote!(#node).to_string();
+        if tokens.contains("Atomic") || tokens.contains("Mutex") || tokens.contains("RwLock") || tokens.contains("SpinLock") || tokens.contains("Cache") || tokens.contains("Shared") {
+            self.has_structs_or_enums = true;
+        }
         syn::visit::visit_item_struct(self, node);
     }
 
     fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
-        self.has_structs_or_enums = true;
+        let tokens = quote::quote!(#node).to_string();
+        if tokens.contains("Atomic") || tokens.contains("Mutex") || tokens.contains("RwLock") || tokens.contains("SpinLock") || tokens.contains("Cache") || tokens.contains("Shared") {
+            self.has_structs_or_enums = true;
+        }
         syn::visit::visit_item_enum(self, node);
     }
 
