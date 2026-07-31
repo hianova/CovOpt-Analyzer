@@ -1,5 +1,5 @@
 use crate::config::TargetConfig;
-use crate::runner::CargoTestRunner;
+use crate::runner::{AuditContext, CargoTestRunner};
 use covopt_macro::covopt_param;
 use std::fmt::Write;
 use std::process::Command;
@@ -11,12 +11,28 @@ pub struct EntropyResult {
     pub total_score: f64,         // 0 - 100
 }
 
-pub fn calculate_entropy_score(config: &TargetConfig, compact: bool) -> EntropyResult {
+pub fn calculate_entropy_score(
+    config: &TargetConfig,
+    compact: bool,
+    fast: bool,
+    audit_context: Option<&AuditContext>,
+    cli_noise_result: Option<(usize, f64)>,
+) -> EntropyResult {
     let mut details = String::new();
     let _ = writeln!(details, "\n[Entropy Analyzer] Starting Evaluation...");
-    let cli_noise = compute_cli_noise(&mut details);
-    let fuzz_variance = compute_fuzz_variance(config, &mut details);
-    let branch_sprawl = compute_branch_sprawl(config, &mut details);
+    let cli_noise = compute_cli_noise(&mut details, cli_noise_result);
+    let fuzz_variance = if fast {
+        let _ = writeln!(details, "  -> Fuzz-Cov Variance: skipped (--fast mode)");
+        0.0
+    } else {
+        compute_fuzz_variance(config, &mut details, audit_context)
+    };
+    let branch_sprawl = if fast {
+        let _ = writeln!(details, "  -> API Branch Sprawl: skipped (--fast mode)");
+        0.0
+    } else {
+        compute_branch_sprawl(config, &mut details, audit_context)
+    };
 
     let total = fuzz_variance + branch_sprawl + cli_noise;
 
@@ -97,20 +113,20 @@ pub fn parse_cli_noise_from_json(stdout: &str) -> (usize, f64) {
     (warning_count, score)
 }
 
-fn compute_cli_noise(details: &mut String) -> f64 {
+fn compute_cli_noise(details: &mut String, cached_result: Option<(usize, f64)>) -> f64 {
     let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
-    let output = Command::new("cargo")
+    let (warning_count, score) = if let Some(result) = cached_result {
+        result
+    } else if let Ok(output) = Command::new("cargo")
         .args([
             "check",
             "--workspace",
             "--all-targets",
             "--message-format=json",
         ])
-        .output();
-
-    let (warning_count, score) = if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_cli_noise_from_json(&stdout)
+        .output()
+    {
+        parse_cli_noise_from_json(&String::from_utf8_lossy(&output.stdout))
     } else {
         (0, 0.0)
     };
@@ -123,36 +139,44 @@ fn compute_cli_noise(details: &mut String) -> f64 {
     score
 }
 
-fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
+fn compute_fuzz_variance(
+    config: &TargetConfig,
+    details: &mut String,
+    audit_context: Option<&AuditContext>,
+) -> f64 {
     let _ = writeln!(details, "  -> Calculating Fuzz-Cov Variance (A)...");
     let iterations = config
         .fuzz_iterations
         .unwrap_or(covopt_param!("M_69_54", 10));
     let n_value = covopt_param!("M_70_18", 100); // Use a fixed N for fuzzing loops
 
-    let output_dir = tempfile::tempdir().unwrap().path().to_path_buf();
-    let mut packages_to_compile = Vec::new();
-    if let Some(pkg) =
-        crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref())
-    {
-        packages_to_compile.push(pkg);
-    }
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile)
-        .unwrap_or_default();
-    let runner = crate::runner::CargoTestRunner::new(&config.test, &output_dir, executables);
+    let local_context;
+    let context = if let Some(context) = audit_context {
+        context
+    } else {
+        let mut packages_to_compile = Vec::new();
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+            &config.test,
+            config.package.as_ref(),
+        ) {
+            packages_to_compile.push(pkg);
+        }
+        local_context = match AuditContext::compile(&packages_to_compile) {
+            Ok(context) => context,
+            Err(_) => return covopt_param!("M_107_15", 15.0),
+        };
+        &local_context
+    };
 
     let hit_counts: Vec<f64> = (0..iterations)
         .into_iter()
         .filter_map(|i| {
             let seed = i as u64 * covopt_param!("M_85_34", 1337) + covopt_param!("M_85_41", 1000);
-            let iter_dir = tempfile::tempdir()
-                .expect("Failed to create tempdir")
-                .path()
-                .to_path_buf();
-            let local_runner = crate::runner::CargoTestRunner::new(
+            let iter_dir = tempfile::tempdir().expect("Failed to create tempdir");
+            let local_runner = crate::runner::CargoTestRunner::from_compiled(
                 &config.test,
-                &iter_dir,
-                runner.executables.clone(),
+                iter_dir.path(),
+                &context.workspace_tests,
             );
 
             if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
@@ -199,7 +223,11 @@ fn compute_fuzz_variance(config: &TargetConfig, details: &mut String) -> f64 {
     score
 }
 
-fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
+fn compute_branch_sprawl(
+    config: &TargetConfig,
+    details: &mut String,
+    audit_context: Option<&AuditContext>,
+) -> f64 {
     let _ = writeln!(details, "  -> Calculating API Branch Sprawl (B)...");
 
     let tests_str = match &config.tests {
@@ -223,22 +251,27 @@ fn compute_branch_sprawl(config: &TargetConfig, details: &mut String) -> f64 {
     }
 
     let mut covered_lines_per_test: Vec<std::collections::HashSet<u64>> = Vec::new();
-    let output_dir = tempfile::tempdir()
-        .expect("Failed to create tempdir")
-        .path()
-        .to_path_buf();
-
-    let mut packages_to_compile = Vec::new();
-    if let Some(pkg) =
-        crate::static_analysis::resolve_package_for_target(&config.test, config.package.as_ref())
-    {
-        packages_to_compile.push(pkg);
-    }
-    let executables = crate::runner::compile_workspace_tests(&output_dir, &packages_to_compile)
-        .unwrap_or_default();
+    let local_context;
+    let context = if let Some(context) = audit_context {
+        context
+    } else {
+        let mut packages_to_compile = Vec::new();
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+            &config.test,
+            config.package.as_ref(),
+        ) {
+            packages_to_compile.push(pkg);
+        }
+        local_context = match AuditContext::compile(&packages_to_compile) {
+            Ok(context) => context,
+            Err(_) => return covopt_param!("M_188_15", 20.0),
+        };
+        &local_context
+    };
 
     for tc in &test_cases {
-        let runner = CargoTestRunner::new(tc, &output_dir, executables.clone());
+        let runner =
+            CargoTestRunner::from_compiled(tc, context.output_dir.path(), &context.workspace_tests);
         if let Ok((map, _)) = runner.run(covopt_param!("M_170_41", 100), None) {
             let mut lines = std::collections::HashSet::new();
             if let Some((target_file, _, _, _)) =

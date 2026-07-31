@@ -1,94 +1,31 @@
-use crate::harden;
-use crate::{CiArgs, commands};
-use CovOpt_Analyzer::config::CovOptConfig;
-use covopt_macro::covopt_param;
+//! Compatibility adapter for the pre-V3 `ci` entry point.
+//!
+//! The command implementation lives in `commands::run_check`; this module
+//! remains only so downstream callers of the old library API do not break.
 
-pub fn run_pipeline(config: CovOptConfig, args: &CiArgs) -> Result<(), Box<dyn std::error::Error>> {
-    println!("===================================================");
-    println!("🚀 Starting CovOpt-Analyzer Unified Auto-Pilot (CI)");
-    println!("===================================================");
+use crate::commands;
+use CovOpt_Analyzer::config::{CheckArgs, CiArgs, CovOptConfig};
 
-    if let Some(ref base) = args.base {
-        println!(
-            "▶️ Base branch specified: {}. Restricting analysis to modified files.",
-            base
-        );
-    }
-
-    // Step 1: Clean & Format (Fix)
-    if config.pipeline.run_fix {
-        println!("Step 1: Running Auto-Fix (cargo clippy --fix & magic numbers)...");
-        unsafe {
-            std::env::set_var("COVOPT_NON_INTERACTIVE", "1");
-        }
-        commands::run_fix(args.base.clone());
-        CovOpt_Analyzer::scanner::run_scan(args.base.clone(), true, false);
-        println!("✅ [CI OK] Fix complete.");
-    }
-
-    if let Err(e) = CovOpt_Analyzer::runner::check_workspace() {
-        eprintln!("❌ [CI Failed] Workspace compilation failed:\n{}", e);
-        std::process::exit(1);
-    }
-
-    if config.pipeline.run_audit {
-        println!("▶️ Step 2: Running `covopt audit`...");
-        commands::run_audit(&CovOpt_Analyzer::config::AuditArgs {
-            test: None,
-            fast: args.fast,
-            json: false,
-            staged: args.base.is_some(),
-        });
-        println!("✅ [CI OK] Audit passed.");
-    }
-
-    // Step 3: Optimize
-    if config.pipeline.run_optimize && !args.fast {
-        println!("▶️ Step 3: Running `covopt optimize` (Auto-Tuning)...");
-        for target_config in &config.target {
-            println!("  -> Optimizing target: {}", target_config.test);
-            // Defaulting to running explore logic for optimization in CI pipeline
-            crate::explore::run(
-                "src",
-                "UnknownTrait",
-                "evaluate_fitness",
-                covopt_param!("M_29_75", 0.99),
-            );
-        }
-        println!("✅ [CI OK] Optimization complete.");
-    } else if config.pipeline.run_optimize && args.fast {
-        println!("⏭️ [CI Skip] Skipping optimize step in fast mode.");
-    }
-
-    // Step 4: Harden (if configured)
-    if config.pipeline.run_harden && !args.skip_harden && !args.fast {
-        println!("▶️ Step 4: Running `covopt harden`...");
-        let mut success = true;
-        for target_config in &config.target {
-            let fuzz_iters = target_config.fuzz_iterations.unwrap_or(0);
-            if fuzz_iters > 0 {
-                println!("  -> Hardening target: {}", target_config.test);
-                if !harden::run_fuzz(&target_config.test) {
-                    success = false;
-                    eprintln!("⚠️ [CI Warning] fuzz failed for {}", target_config.test);
-                }
-            }
-        }
-
-        if args.strict && !success {
-            eprintln!("❌ [CI Failed] Hardening encountered errors in strict mode.");
-            std::process::exit(1);
-        } else if !success {
-            eprintln!("⚠️ [CI Warning] Hardening had errors, but continuing.");
+pub fn run_pipeline(
+    _config: CovOptConfig,
+    args: &CiArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    commands::run_check(&CheckArgs {
+        base: args.base.clone(),
+        target: None,
+        mode: args.assurance,
+        plan: false,
+        format: if args.sarif {
+            "sarif".to_string()
+        } else if args.report {
+            "html".to_string()
         } else {
-            println!("✅ [CI OK] Hardening complete.");
-        }
-    } else if config.pipeline.run_harden && (!args.skip_harden) && args.fast {
-        println!("⏭️ [CI Skip] Skipping harden step in fast mode.");
-    }
-
-    println!("===================================================");
-    println!("🎉 CI Pipeline Execution Completed Successfully!");
-    println!("===================================================");
+            "text".to_string()
+        },
+        fast: args.fast,
+        staged: false,
+        debug_artifacts: false,
+        budget: args.budget.clone(),
+    })?;
     Ok(())
 }

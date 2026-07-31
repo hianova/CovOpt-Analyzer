@@ -1,0 +1,5 @@
+error: unknown covopt_target field `complxity`
+ --> tests/ui/attribute_typo.rs:3:17
+  |
+3 | #[covopt_target(complxity = "O(1)")]
+  |                 ^^^^^^^^^

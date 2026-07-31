@@ -1,12 +1,43 @@
 use covopt_macro::covopt_param;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCoverage {
+    pub file: String,
+    pub name: String,
+    pub start_line: u64,
+    pub end_line: u64,
+    pub execution_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchCoverage {
+    pub file: String,
+    pub line: u64,
+    pub block: String,
+    pub branch: String,
+    pub taken: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CoverageMap {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     // hit_counts[file_path][line_number] = execution_count
     pub hit_counts: HashMap<String, HashMap<u64, u64>>,
     // symbol_map[file_path][line_number] = mangled_symbol_name
     pub symbol_map: HashMap<String, HashMap<u64, String>>,
+    /// Exact LCOV function records, including execution counts and regions.
+    #[serde(default)]
+    pub functions: Vec<FunctionCoverage>,
+    /// Branch records retain taken/not-taken information.
+    #[serde(default)]
+    pub branches: Vec<BranchCoverage>,
+}
+
+fn default_schema_version() -> u32 {
+    crate::model::MODEL_SCHEMA_VERSION
 }
 
 impl CoverageMap {
@@ -17,6 +48,9 @@ impl CoverageMap {
 
         let mut current_file = String::new();
         let mut current_functions: Vec<(u64, String)> = Vec::new();
+        let mut current_function_hits: HashMap<String, u64> = HashMap::new();
+        let mut functions = Vec::new();
+        let mut branches = Vec::new();
         let mut current_file_hit_counts: HashMap<u64, u64> = HashMap::new();
 
         for line in lcov_str.lines() {
@@ -24,6 +58,7 @@ impl CoverageMap {
             if let Some(stripped) = line.strip_prefix("SF:") {
                 current_file = stripped.to_string();
                 current_functions.clear();
+                current_function_hits.clear();
                 current_file_hit_counts.clear();
             } else if let Some(stripped) = line.strip_prefix("FN:") {
                 // FN:<line>,<name>
@@ -32,6 +67,28 @@ impl CoverageMap {
                     && let Ok(line_num) = parts[0].parse::<u64>()
                 {
                     current_functions.push((line_num, parts[1].to_string()));
+                }
+            } else if let Some(stripped) = line.strip_prefix("FNDA:") {
+                // FNDA:<execution-count>,<name>
+                let parts: Vec<&str> = stripped.splitn(2, ',').collect();
+                if parts.len() == 2
+                    && let Ok(hits) = parts[0].parse::<u64>()
+                {
+                    current_function_hits.insert(parts[1].to_string(), hits);
+                }
+            } else if let Some(stripped) = line.strip_prefix("BRDA:") {
+                // BRDA:<line>,<block>,<branch>,<taken|->
+                let parts = stripped.splitn(4, ',').collect::<Vec<_>>();
+                if parts.len() == 4
+                    && let Ok(line_number) = parts[0].parse::<u64>()
+                {
+                    branches.push(BranchCoverage {
+                        file: current_file.clone(),
+                        line: line_number,
+                        block: parts[1].to_string(),
+                        branch: parts[2].to_string(),
+                        taken: (parts[3] != "-").then(|| parts[3].parse::<u64>().unwrap_or(0)),
+                    });
                 }
             } else if let Some(stripped) = line.strip_prefix("DA:") {
                 // DA:<line>,<hits>
@@ -45,6 +102,26 @@ impl CoverageMap {
             } else if line == "end_of_record" && !current_file.is_empty() {
                 // Sort functions by start line
                 current_functions.sort_by_key(|k| k.0);
+
+                for (index, (start_line, name)) in current_functions.iter().enumerate() {
+                    let end_line = current_functions.get(index + 1).map_or_else(
+                        || {
+                            current_file_hit_counts
+                                .keys()
+                                .max()
+                                .copied()
+                                .unwrap_or(*start_line)
+                        },
+                        |(next_start, _)| next_start.saturating_sub(1),
+                    );
+                    functions.push(FunctionCoverage {
+                        file: current_file.clone(),
+                        name: name.clone(),
+                        start_line: *start_line,
+                        end_line: end_line.max(*start_line),
+                        execution_count: current_function_hits.get(name).copied().unwrap_or(0),
+                    });
+                }
 
                 let symbol_file_map = symbol_map.entry(current_file.clone()).or_default();
                 let hit_file_map = hit_counts.entry(current_file.clone()).or_default();
@@ -68,8 +145,11 @@ impl CoverageMap {
         }
 
         Ok(Self {
+            schema_version: crate::model::MODEL_SCHEMA_VERSION,
             hit_counts,
             symbol_map,
+            functions,
+            branches,
         })
     }
 
@@ -214,6 +294,41 @@ impl CoverageMap {
             None
         }
     }
+
+    pub fn function_record(
+        &self,
+        filename_suffix: &str,
+        function_name: &str,
+    ) -> Option<&FunctionCoverage> {
+        self.functions.iter().find(|record| {
+            path_matches(&record.file, filename_suffix)
+                && (record.name == function_name || record.name.contains(function_name))
+        })
+    }
+
+    pub fn branches_for(
+        &self,
+        filename_suffix: &str,
+        start_line: u64,
+        end_line: u64,
+    ) -> Vec<&BranchCoverage> {
+        self.branches
+            .iter()
+            .filter(|branch| {
+                path_matches(&branch.file, filename_suffix)
+                    && branch.line >= start_line
+                    && branch.line <= end_line
+            })
+            .collect()
+    }
+}
+
+fn path_matches(actual: &str, requested: &str) -> bool {
+    let requested = requested.trim_start_matches("./");
+    actual.ends_with(requested)
+        || actual
+            .replace('\\', "/")
+            .ends_with(&requested.replace('\\', "/"))
 }
 
 #[cfg(test)]
@@ -254,6 +369,9 @@ end_of_record
             map.find_symbol("dummy.rs", 3),
             Some("_dummy_loop_test".to_string())
         );
+        let function = map.function_record("dummy.rs", "_dummy_loop_test").unwrap();
+        assert_eq!(function.execution_count, 10);
+        assert_eq!(function.start_line, 1);
 
         // Test coverage calculation
         let (executed, total) = map.get_function_coverage("_dummy_loop_test").unwrap();

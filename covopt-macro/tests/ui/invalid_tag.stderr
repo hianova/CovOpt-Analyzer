@@ -1,0 +1,5 @@
+error: risk/tag entries must not be empty
+ --> tests/ui/invalid_tag.rs:4:45
+  |
+4 |     let _ = covopt_param!("tag", 1, risk = [""]);
+  |                                             ^^

@@ -1,8 +1,120 @@
 use crate::coverage::CoverageMap;
 use covopt_macro::covopt_param;
+use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+static CI_DEADLINE: OnceLock<Instant> = OnceLock::new();
+
+pub fn install_ci_deadline(budget: Duration) -> Result<(), String> {
+    let reporting_reserve = Duration::from_millis(covopt_param!("CI_REPORT_RESERVE_MS", 2_000));
+    let work_budget = budget.saturating_sub(reporting_reserve);
+    CI_DEADLINE
+        .set(Instant::now() + work_budget)
+        .map_err(|_| "CI deadline was already installed for this process".to_string())
+}
+
+pub fn remaining_ci_budget() -> Option<Duration> {
+    CI_DEADLINE
+        .get()
+        .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+}
+
+pub fn ci_budget_exhausted() -> bool {
+    remaining_ci_budget().is_some_and(|remaining| remaining.is_zero())
+}
+
+pub fn command_output_with_ci_deadline(
+    command: &mut Command,
+    operation: &str,
+) -> Result<Output, String> {
+    let Some(timeout) = remaining_ci_budget() else {
+        return command
+            .output()
+            .map_err(|error| format!("Failed to run {operation}: {error}"));
+    };
+    if timeout.is_zero() {
+        return Err(format!("CI budget exhausted before {operation}"));
+    }
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to run {operation}: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("Could not capture stdout for {operation}"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("Could not capture stderr for {operation}"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stream = stdout;
+        let _ = stream.read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stream = stderr;
+        let _ = stream.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let started = Instant::now();
+    let poll_interval = Duration::from_millis(covopt_param!("CI_PROCESS_POLL_MS", 10));
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) if started.elapsed() < timeout => std::thread::sleep(poll_interval),
+            Ok(None) => {
+                #[cfg(unix)]
+                {
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &format!("-{}", child.id())])
+                        .status();
+                }
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .map_err(|error| format!("Failed to stop timed-out {operation}: {error}"))?;
+                break (status, true);
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Failed while waiting for {operation}: {error}"));
+            }
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| format!("stdout reader panicked for {operation}"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| format!("stderr reader panicked for {operation}"))?;
+    if timed_out {
+        return Err(format!(
+            "CI budget exhausted while running {operation}: {}",
+            String::from_utf8_lossy(&stderr).trim()
+        ));
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
 
 pub struct CoverageRunner {
     pub target_name: String,
@@ -34,7 +146,6 @@ impl CoverageRunner {
 
         self.compile()?;
         self.execute()?;
-        self.merge_profdata()?;
         self.merge_profdata()?;
         let lcov_str = self.export_lcov()?;
 
@@ -130,9 +241,14 @@ impl CoverageRunner {
     }
 }
 
-pub fn check_workspace() -> Result<(), String> {
+pub struct WorkspaceCheck {
+    pub cargo_check_stdout: String,
+}
+
+pub fn check_workspace_with_diagnostics() -> Result<WorkspaceCheck, String> {
     let mut cmd = Command::new("cargo");
-    cmd.env("RUSTFLAGS", "--cap-lints warn");
+    cmd.env("RUSTFLAGS", "--cap-lints warn")
+        .env_remove("LLVM_PROFILE_FILE");
     cmd.args([
         "check",
         "--workspace",
@@ -144,9 +260,7 @@ pub fn check_workspace() -> Result<(), String> {
         cmd.arg("--color=never");
     }
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to run cargo check --workspace: {}", e))?;
+    let output = command_output_with_ci_deadline(&mut cmd, "cargo check --workspace")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -158,10 +272,10 @@ pub fn check_workspace() -> Result<(), String> {
                     .get("message")
                     .and_then(|m| m.get("rendered"))
                     .and_then(|r| r.as_str())
-                {
-                    rustc_errors.push_str(msg);
-                    rustc_errors.push('\n');
-                }
+            {
+                rustc_errors.push_str(msg);
+                rustc_errors.push('\n');
+            }
         }
         return Err(format!(
             "Workspace compilation failed.\n{}\n{}",
@@ -169,13 +283,67 @@ pub fn check_workspace() -> Result<(), String> {
         ));
     }
 
-    Ok(())
+    Ok(WorkspaceCheck {
+        cargo_check_stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    })
+}
+
+pub fn check_workspace() -> Result<(), String> {
+    check_workspace_with_diagnostics().map(|_| ())
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledTestExecutable {
+    pub path: PathBuf,
+    pub package_id: Option<String>,
+    pub target_name: Option<String>,
+    pub target_kinds: Vec<String>,
+    pub tests: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CompiledWorkspaceTests {
+    pub executables: Vec<CompiledTestExecutable>,
+    pub test_index: HashMap<String, PathBuf>,
+}
+
+impl CompiledWorkspaceTests {
+    pub fn executable_for(&self, test_name: &str) -> Option<&PathBuf> {
+        self.test_index.get(test_name)
+    }
+
+    pub fn executable_record_for(&self, test_name: &str) -> Option<&CompiledTestExecutable> {
+        self.executables
+            .iter()
+            .find(|executable| executable.tests.iter().any(|test| test == test_name))
+    }
+}
+
+pub struct AuditContext {
+    pub output_dir: tempfile::TempDir,
+    pub workspace_tests: CompiledWorkspaceTests,
+    pub packages: Vec<String>,
+    pub cli_noise_result: Option<(usize, f64)>,
+}
+
+impl AuditContext {
+    pub fn compile(packages: &[String]) -> Result<Self, String> {
+        let output_dir =
+            tempfile::tempdir().map_err(|e| format!("Failed to create audit tempdir: {}", e))?;
+        let workspace_tests = compile_workspace_tests(output_dir.path(), packages)?;
+        Ok(Self {
+            output_dir,
+            workspace_tests,
+            packages: packages.to_vec(),
+            cli_noise_result: None,
+        })
+    }
 }
 
 pub fn compile_workspace_tests(
     output_dir: &Path,
     packages: &[String],
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<CompiledWorkspaceTests, String> {
     if !output_dir.exists() {
         fs::create_dir_all(output_dir)
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -203,8 +371,7 @@ pub fn compile_workspace_tests(
         cmd.arg("-p").arg(pkg);
     }
 
-    let output = cmd
-        .output()
+    let output = command_output_with_ci_deadline(&mut cmd, "instrumented cargo test --no-run")
         .map_err(|e| {
             let err_msg = e.to_string();
             if err_msg.contains("Operation not permitted") || err_msg.contains("Permission denied") {
@@ -224,10 +391,10 @@ pub fn compile_workspace_tests(
                     .get("message")
                     .and_then(|m| m.get("rendered"))
                     .and_then(|r| r.as_str())
-                {
-                    rustc_errors.push_str(msg);
-                    rustc_errors.push('\n');
-                }
+            {
+                rustc_errors.push_str(msg);
+                rustc_errors.push('\n');
+            }
         }
         if stderr.contains("Operation not permitted")
             || stderr.contains("Permission denied")
@@ -241,22 +408,8 @@ pub fn compile_workspace_tests(
         return Err(format!("Compilation failed: {}\n{}", stderr, rustc_errors));
     }
 
-    let mut executables = Vec::new();
+    let mut compiled = CompiledWorkspaceTests::default();
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Clean up garbage `default_*.profraw` generated by build scripts
-    for dir in &[".", ".."] {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str()
-                    && name.starts_with("default_")
-                    && name.ends_with(".profraw")
-                {
-                    let _ = fs::remove_file(entry.path());
-                }
-            }
-        }
-    }
 
     for line in stdout.lines() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
@@ -294,18 +447,183 @@ pub fn compile_workspace_tests(
                 || exe.contains("proc-macro");
 
             if !is_proc_macro {
-                executables.push(PathBuf::from(exe));
+                let path = PathBuf::from(exe);
+                let tests = list_tests_in_executable(&path)?;
+                for test_name in &tests {
+                    compiled
+                        .test_index
+                        .entry(test_name.clone())
+                        .or_insert_with(|| path.clone());
+                }
+                compiled.executables.push(CompiledTestExecutable {
+                    path,
+                    package_id: v
+                        .get("package_id")
+                        .and_then(|p| p.as_str())
+                        .map(ToOwned::to_owned),
+                    target_name: v
+                        .get("target")
+                        .and_then(|t| t.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(ToOwned::to_owned),
+                    target_kinds: v
+                        .get("target")
+                        .and_then(|target| target.get("kind"))
+                        .and_then(|kinds| kinds.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|kind| kind.as_str().map(ToOwned::to_owned))
+                        .collect(),
+                    tests,
+                });
             }
         }
     }
 
-    Ok(executables)
+    Ok(compiled)
+}
+
+fn list_tests_in_executable(executable: &Path) -> Result<Vec<String>, String> {
+    let output = Command::new(executable)
+        .args(["--list", "--format", "terse"])
+        .output()
+        .map_err(|e| {
+            format!(
+                "Failed to list tests in executable {}: {}",
+                executable.display(),
+                e
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to list tests in executable {}: {}",
+            executable.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().rsplit_once(": ").map(|(name, _)| name.trim()))
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+pub fn debug_artifacts_enabled() -> bool {
+    matches!(
+        std::env::var("COVOPT_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    ) || matches!(
+        std::env::var("COVOPT_DEBUG_ARTIFACTS").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
 }
 
 pub struct CargoTestRunner {
     pub test_name: String,
     pub output_dir: PathBuf,
     pub executables: Vec<PathBuf>,
+    pub test_executable: Option<PathBuf>,
+    pub package_id: Option<String>,
+    pub cargo_target_name: Option<String>,
+    pub cargo_target_kinds: Vec<String>,
+}
+
+fn cargo_package_name(package_id: &str) -> Option<&str> {
+    let (source, fragment) = package_id
+        .rsplit_once('#')
+        .map_or((package_id, package_id), |(source, value)| (source, value));
+    let name = if let Some((name, _version)) = fragment.split_once('@') {
+        name
+    } else if fragment
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        source.trim_end_matches('/').rsplit('/').next()?
+    } else {
+        fragment.split_whitespace().next()?
+    };
+    (!name.is_empty()).then_some(name)
+}
+
+fn add_cargo_target_selector(
+    command: &mut Command,
+    target_name: &str,
+    target_kinds: &[String],
+) -> Result<(), String> {
+    let has_kind = |expected: &str| target_kinds.iter().any(|kind| kind == expected);
+    if has_kind("test") {
+        command.arg("--test").arg(target_name);
+    } else if has_kind("lib") || has_kind("rlib") {
+        command.arg("--lib");
+    } else if has_kind("bin") {
+        command.arg("--bin").arg(target_name);
+    } else if has_kind("example") {
+        command.arg("--example").arg(target_name);
+    } else if has_kind("bench") {
+        command.arg("--bench").arg(target_name);
+    } else {
+        return Err(format!(
+            "Unsupported Cargo target kind {:?} for '{}'",
+            target_kinds, target_name
+        ));
+    }
+    Ok(())
+}
+
+fn asm_artifacts_from_cargo_json(stdout: &[u8], target_name: &str) -> Vec<PathBuf> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| {
+            message.get("reason").and_then(|value| value.as_str()) == Some("compiler-artifact")
+                && message
+                    .get("target")
+                    .and_then(|target| target.get("name"))
+                    .and_then(|name| name.as_str())
+                    == Some(target_name)
+        })
+        .flat_map(|message| {
+            message
+                .get("filenames")
+                .and_then(|filenames| filenames.as_array())
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|filename| filename.as_str().map(PathBuf::from))
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("s"))
+        .collect()
+}
+
+fn find_target_asm_fallback(target_name: &str) -> Vec<PathBuf> {
+    let artifact_prefix = format!("{}-", target_name.replace('-', "_"));
+    [
+        PathBuf::from("target/release/deps"),
+        PathBuf::from("../target/release/deps"),
+        PathBuf::from("../../target/release/deps"),
+    ]
+    .into_iter()
+    .filter_map(|directory| fs::read_dir(directory).ok())
+    .flatten()
+    .filter_map(Result::ok)
+    .map(|entry| entry.path())
+    .filter(|path| {
+        path.extension().and_then(|extension| extension.to_str()) == Some("s")
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&artifact_prefix))
+    })
+    .max_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    })
+    .into_iter()
+    .collect()
 }
 
 impl CargoTestRunner {
@@ -314,6 +632,35 @@ impl CargoTestRunner {
             test_name: test_name.to_string(),
             output_dir: output_dir.to_path_buf(),
             executables,
+            test_executable: None,
+            package_id: None,
+            cargo_target_name: None,
+            cargo_target_kinds: Vec::new(),
+        }
+    }
+
+    pub fn from_compiled(
+        test_name: &str,
+        output_dir: &Path,
+        compiled: &CompiledWorkspaceTests,
+    ) -> Self {
+        let record = compiled.executable_record_for(test_name);
+        Self {
+            test_name: test_name.to_string(),
+            output_dir: output_dir.to_path_buf(),
+            executables: compiled
+                .executables
+                .iter()
+                .map(|executable| executable.path.clone())
+                .collect(),
+            test_executable: record
+                .map(|executable| executable.path.clone())
+                .or_else(|| compiled.executable_for(test_name).cloned()),
+            package_id: record.and_then(|executable| executable.package_id.clone()),
+            cargo_target_name: record.and_then(|executable| executable.target_name.clone()),
+            cargo_target_kinds: record
+                .map(|executable| executable.target_kinds.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -323,55 +670,42 @@ impl CargoTestRunner {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        let _t0 = std::time::Instant::now();
-        let executables = &self.executables;
-
-        let _t1 = std::time::Instant::now();
-
-        if executables.is_empty() {
-            return Err("No test executables found".to_string());
-        }
+        let executable = self.test_executable.as_ref().ok_or_else(|| {
+            format!(
+                "No compiled test executable contains target test '{}'; refusing to run all harnesses",
+                self.test_name
+            )
+        })?;
 
         let t2 = std::time::Instant::now();
-        let (peak_rss, successful_exe) = self.execute_tests(executables, n, seed)?;
+        let peak_rss = self.execute_test(executable, n, seed)?;
         let t3 = std::time::Instant::now();
         self.merge_profdata(n)?;
         let t4 = std::time::Instant::now();
 
-        let target_executables = if let Some(exe) = successful_exe {
-            vec![exe]
-        } else {
-            executables.clone()
-        };
-
-        let lcov_str = self.export_lcov(&target_executables, n)?;
+        let lcov_str = self.export_lcov(std::slice::from_ref(executable), n)?;
         let t5 = std::time::Instant::now();
 
         let map = CoverageMap::from_lcov(&lcov_str)?;
         let t6 = std::time::Instant::now();
 
-        eprintln!(
-            "[Profile] execute_tests (incl. OS process spawn overhead): {:?}",
-            t3.duration_since(t2)
-        );
-        eprintln!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
-        eprintln!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
-        eprintln!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
-
-        let _ = std::fs::write(
-            self.output_dir.join(format!("covopt_debug_{}.json", n)),
-            &lcov_str,
-        );
-        let _ = std::fs::write(format!("/tmp/covopt_debug_{}.json", n), &lcov_str);
+        if debug_artifacts_enabled() {
+            eprintln!(
+                "[Profile] execute_tests (incl. OS process spawn overhead): {:?}",
+                t3.duration_since(t2)
+            );
+            eprintln!("[Profile] merge_profdata: {:?}", t4.duration_since(t3));
+            eprintln!("[Profile] export_lcov: {:?}", t5.duration_since(t4));
+            eprintln!("[Profile] parse_lcov: {:?}", t6.duration_since(t5));
+            let _ = std::fs::write(
+                self.output_dir.join(format!("covopt_debug_{}.json", n)),
+                &lcov_str,
+            );
+        }
         Ok((map, peak_rss))
     }
 
-    fn execute_tests(
-        &self,
-        executables: &[PathBuf],
-        n: usize,
-        seed: Option<u64>,
-    ) -> Result<(u64, Option<PathBuf>), String> {
+    fn execute_test(&self, exe: &Path, n: usize, seed: Option<u64>) -> Result<u64, String> {
         // Clean up any existing profraw files for this N to prevent accumulating hit counts
         if let Ok(entries) = fs::read_dir(&self.output_dir) {
             for entry in entries.flatten() {
@@ -385,58 +719,68 @@ impl CargoTestRunner {
         }
 
         let mut max_rss = 0u64;
-        let mut successful_exe = None;
+        let profraw = self.output_dir.join(format!("covopt_{}_%p.profraw", n));
 
-        for exe in executables {
-            let profraw = self.output_dir.join(format!("covopt_{}_%p.profraw", n));
+        // On macOS, `/usr/bin/time -l` outputs peak RSS. On Linux, `/usr/bin/time -v` works if installed.
+        // For cross-platform simplicity in this specialized tool, we'll try `/usr/bin/time -l`.
+        let mut cmd = Command::new("/usr/bin/time");
+        cmd.arg("-l").arg(exe);
+        cmd.arg(&self.test_name)
+            .arg("--exact")
+            .env("LLVM_PROFILE_FILE", &profraw)
+            .env("COVOPT_N", n.to_string());
 
-            // On macOS, `/usr/bin/time -l` outputs peak RSS. On Linux, `/usr/bin/time -v` works if installed.
-            // For cross-platform simplicity in this specialized tool, we'll try `/usr/bin/time -l`.
-            let mut cmd = Command::new("/usr/bin/time");
-            cmd.arg("-l").arg(exe);
-            cmd.arg(&self.test_name)
-                .arg("--exact")
-                .env("LLVM_PROFILE_FILE", &profraw)
-                .env("COVOPT_N", n.to_string());
+        if let Some(s) = seed {
+            cmd.env("COVOPT_FUZZ_SEED", s.to_string());
+        }
 
-            if let Some(s) = seed {
-                cmd.env("COVOPT_FUZZ_SEED", s.to_string());
-            }
+        let output = command_output_with_ci_deadline(
+            &mut cmd,
+            &format!("coverage test '{}'", self.test_name),
+        )?;
 
-            let output = cmd
-                .output()
-                .map_err(|e| format!("Failed to run test {}: {}", exe.display(), e))?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
 
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            // Parse peak RSS
-            for line in stderr.lines() {
-                if line.contains("maximum resident set size")
-                    && let Some(num_str) = line.split_whitespace().next()
-                    && let Ok(rss) = num_str.parse::<u64>()
-                    && rss > max_rss
-                {
-                    max_rss = rss;
-                }
-            }
-
-            if !output.status.success() {
-                if !stdout.contains("0 passed") {
-                    eprintln!("Test {} failed: {}", exe.display(), stderr);
-                }
-            } else {
-                if stdout.contains("1 passed") {
-                    if std::env::var("COVOPT_COMPACT").is_err() {
-                        println!("Test ran successfully.");
-                    }
-                    eprintln!("DEBUG: successful_exe = {}", exe.display());
-                    successful_exe = Some(exe.clone());
-                }
+        // Parse peak RSS
+        for line in stderr.lines() {
+            if line.contains("maximum resident set size")
+                && let Some(num_str) = line.split_whitespace().next()
+                && let Ok(rss) = num_str.parse::<u64>()
+                && rss > max_rss
+            {
+                max_rss = rss;
             }
         }
 
-        Ok((max_rss, successful_exe))
+        if !output.status.success() {
+            return Err(format!(
+                "Test '{}' failed in {}: {}",
+                self.test_name,
+                exe.display(),
+                stderr.trim()
+            ));
+        }
+        if std::env::var("COVOPT_COMPACT").is_err() {
+            println!("Test ran successfully.");
+        }
+        let has_profraw = fs::read_dir(&self.output_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(&format!("covopt_{}_", n)) && name.ends_with(".profraw")
+            });
+        if !has_profraw {
+            return Err(format!(
+                "Test '{}' completed but produced no coverage profile",
+                self.test_name
+            ));
+        }
+
+        Ok(max_rss)
     }
 
     fn merge_profdata(&self, n: usize) -> Result<(), String> {
@@ -468,10 +812,8 @@ impl CargoTestRunner {
         }
         cmd.arg("-o").arg(&profdata);
 
-        let status = cmd
-            .status()
-            .map_err(|e| format!("Failed to run llvm-profdata: {}", e))?;
-        if !status.success() {
+        let output = command_output_with_ci_deadline(&mut cmd, "llvm-profdata merge")?;
+        if !output.status.success() {
             return Err("Profdata merge failed".to_string());
         }
         Ok(())
@@ -493,9 +835,7 @@ impl CargoTestRunner {
             cmd.arg("-object").arg(exe);
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| format!("Failed to run llvm-cov export: {}", e))?;
+        let output = command_output_with_ci_deadline(&mut cmd, "llvm-cov export")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("LLVM Cov Export failed: {}", stderr));
@@ -506,46 +846,56 @@ impl CargoTestRunner {
     }
 
     pub fn compile_asm(&self) -> Result<String, String> {
-        // Compile the tests in release mode with ASM generation and debug symbols for .loc mapping
-        let output = Command::new("cargo")
-            .env("RUSTFLAGS", "-g --emit=asm")
-            .arg("test")
+        let target_name = self.cargo_target_name.as_deref().ok_or_else(|| {
+            format!(
+                "Cannot resolve the Cargo target containing test '{}'",
+                self.test_name
+            )
+        })?;
+        let mut command = Command::new("cargo");
+        command
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env_remove("LLVM_PROFILE_FILE")
+            .arg("rustc")
             .arg("--release")
-            .arg("--no-run")
-            // .arg(&self.test_name) // compiling all tests is safer to find the unit test
-            .output()
-            .map_err(|e| format!("Failed to run cargo test for ASM: {}", e))?;
+            .arg("--message-format=json");
+
+        if let Some(package_name) = self.package_id.as_deref().and_then(cargo_package_name) {
+            command.arg("-p").arg(package_name);
+        }
+        add_cargo_target_selector(&mut command, target_name, &self.cargo_target_kinds)?;
+        command.args(["--", "-g", "--emit=asm"]);
+
+        let output = command_output_with_ci_deadline(&mut command, "targeted release ASM build")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("ASM Compilation failed: {}", stderr));
         }
 
-        let mut all_asm = String::new();
-        let possible_targets = vec![
-            "target/release/deps",
-            "../target/release/deps",
-            "../../target/release/deps",
-        ];
-        for target_dir in possible_targets {
-            if let Ok(entries) = fs::read_dir(target_dir) {
-                for entry in entries.flatten() {
-                    if let Some(ext) = entry.path().extension()
-                        && ext == "s"
-                        && let Ok(content) = fs::read_to_string(entry.path())
-                    {
-                        all_asm.push_str(&content);
-                        all_asm.push('\n');
-                    }
-                }
-            }
+        let asm_files = asm_artifacts_from_cargo_json(&output.stdout, target_name);
+        let asm_files = if asm_files.is_empty() {
+            find_target_asm_fallback(target_name)
+        } else {
+            asm_files
+        };
+        if asm_files.is_empty() {
+            return Err(format!(
+                "Cargo produced no assembly artifact for target '{}'",
+                target_name
+            ));
         }
 
-        if all_asm.is_empty() {
-            Err("Could not find any generated .s file".to_string())
-        } else {
-            Ok(all_asm)
+        let mut target_asm = String::new();
+        for path in asm_files {
+            let content = fs::read_to_string(&path).map_err(|error| {
+                format!("Cannot read ASM artifact {}: {}", path.display(), error)
+            })?;
+            target_asm.push_str(&content);
+            target_asm.push('\n');
         }
+        Ok(target_asm)
     }
 
     pub fn extract_asm_block(&self, asm_content: &str, symbol: &str) -> Option<String> {
@@ -829,12 +1179,12 @@ fn main() {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(
                 &fake_cov_path,
-                fs::Permissions::from_mode(covopt_param!("M_716_75", 493)),
+                fs::Permissions::from_mode(covopt_param!("M_716_75", 0o755)),
             )
             .unwrap();
             fs::set_permissions(
                 &out_bin_path,
-                fs::Permissions::from_mode(covopt_param!("M_717_74", 493)),
+                fs::Permissions::from_mode(covopt_param!("M_717_74", 0o755)),
             )
             .unwrap();
         }
@@ -851,6 +1201,45 @@ fn main() {
         assert!(res.is_ok());
         let map = res.unwrap();
         assert_eq!(map.get_hit_count("dummy", 1), None);
+    }
+
+    #[test]
+    fn cargo_package_name_supports_modern_package_ids() {
+        assert_eq!(
+            cargo_package_name("path+file:///workspace#CovOpt-Analyzer@2.0.0"),
+            Some("CovOpt-Analyzer")
+        );
+        assert_eq!(
+            cargo_package_name("path+file:///workspace/CovOpt-Analyzer#2.0.0"),
+            Some("CovOpt-Analyzer")
+        );
+        assert_eq!(
+            cargo_package_name("registry+https://example.invalid/index#serde@1.0.0"),
+            Some("serde")
+        );
+    }
+
+    #[test]
+    fn cargo_target_selector_uses_the_exact_integration_test() {
+        let mut command = Command::new("cargo");
+        add_cargo_target_selector(&mut command, "binary_search", &["test".to_string()]).unwrap();
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments, ["--test", "binary_search"]);
+    }
+
+    #[test]
+    fn cargo_json_selects_only_the_requested_asm_artifact() {
+        let stdout = br#"
+{"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/other.s"]}
+{"reason":"compiler-artifact","target":{"name":"binary_search"},"filenames":["/tmp/binary_search.s","/tmp/binary_search.d"]}
+"#;
+        assert_eq!(
+            asm_artifacts_from_cargo_json(stdout, "binary_search"),
+            [PathBuf::from("/tmp/binary_search.s")]
+        );
     }
 
     #[test]

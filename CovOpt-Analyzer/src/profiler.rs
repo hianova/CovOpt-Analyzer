@@ -1,5 +1,33 @@
 use covopt_macro::covopt_param;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileResult {
+    pub provider: String,
+    pub target: String,
+    pub passed: bool,
+    pub summary: String,
+}
+
+pub fn run_profile_structured(
+    test_name: Option<&str>,
+    bin_name: Option<&str>,
+    tool: &str,
+) -> ProfileResult {
+    let target = test_name.or(bin_name).unwrap_or("unknown").to_string();
+    let passed = run_profile(test_name, bin_name, tool);
+    ProfileResult {
+        provider: format!("profile:{tool}"),
+        target,
+        passed,
+        summary: if passed {
+            "profile execution passed".to_string()
+        } else {
+            "profile execution failed or was unavailable".to_string()
+        },
+    }
+}
 
 pub fn run_profile(test_name: Option<&str>, bin_name: Option<&str>, tool: &str) -> bool {
     if test_name.is_none() && bin_name.is_none() {

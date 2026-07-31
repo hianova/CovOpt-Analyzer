@@ -1,0 +1,5 @@
+error: unknown covopt_param key `unknown`
+ --> tests/ui/unknown_field.rs:4:39
+  |
+4 |     let _ = covopt_param!("field", 1, unknown = "value");
+  |                                       ^^^^^^^

@@ -4,11 +4,16 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct McaReport {
     pub instructions: usize,
     pub total_cycles: usize,
     pub block_rthroughput: f64,
     pub ipc: f64,
+    pub loads: usize,
+    pub stores: usize,
+    pub calls: usize,
+    pub unsupported_instructions: usize,
 }
 
 pub struct McaRunner {
@@ -22,8 +27,6 @@ impl McaRunner {
 
     pub fn run(&self, asm_block: &str) -> Result<McaReport, String> {
         let mut cmd = Command::new("llvm-mca");
-        cmd.arg("--skip-unsupported-instructions=any");
-
         if let Some(cpu) = &self.cpu {
             cmd.arg(format!("-mcpu={}", cpu));
         }
@@ -79,6 +82,14 @@ impl McaRunner {
                 if parts.len() == covopt_param!("M_77_34", 3) {
                     report.block_rthroughput = parts[2].parse().unwrap_or(0.0);
                 }
+            } else if line.to_ascii_lowercase().contains("unsupported") {
+                report.unsupported_instructions += 1;
+            } else if line.to_ascii_lowercase().contains("load") {
+                report.loads += 1;
+            } else if line.to_ascii_lowercase().contains("store") {
+                report.stores += 1;
+            } else if line.to_ascii_lowercase().contains("call") {
+                report.calls += 1;
             }
         }
 

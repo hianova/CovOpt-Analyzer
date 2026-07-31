@@ -1,7 +1,8 @@
-use covopt_macro::{covopt_param, covopt_test};
+use covopt_macro::{covopt_evidence, covopt_param, covopt_target, covopt_test};
 use std::hint::black_box;
 
 #[inline(never)]
+#[covopt_target(id = "binary_search", complexity = "O(log N)")]
 pub fn compute_binary_search(n: usize) {
     let vec: Vec<usize> = (0..n).collect();
     let iters = covopt_param!("BINARY_SEARCH_ITERS", 100);
@@ -15,6 +16,7 @@ pub fn compute_binary_search(n: usize) {
 }
 
 #[cfg(test)]
+#[covopt_evidence(target = "binary_search", n = [1000, 5000, 10000], seeds = "adaptive")]
 #[covopt_test(
     target_fn = "compute_binary_search",
     expected = "O(log N)",

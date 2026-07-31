@@ -1,0 +1,5 @@
+error: duplicate covopt_param key
+ --> tests/ui/duplicate_key.rs:4:64
+  |
+4 |     let _ = covopt_param!("duplicate", 1, class = "threshold", class = "capacity");
+  |                                                                ^^^^^

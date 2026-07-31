@@ -1,0 +1,5 @@
+error: parameter ID must be non-empty and contain only [A-Za-z0-9_.:-]
+ --> tests/ui/invalid_id.rs:4:27
+  |
+4 |     let _ = covopt_param!("bad id", 1);
+  |                           ^^^^^^^^

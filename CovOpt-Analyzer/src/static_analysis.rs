@@ -1,5 +1,8 @@
+use covopt_schema::ParameterDescriptor;
+use quote::ToTokens;
 use std::fs;
 use std::path::{Path, PathBuf};
+use syn::parse::Parser;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
@@ -209,9 +212,10 @@ impl<'ast> Visit<'ast> for ThreadActivityVisitor {
                     self.inline_join_count += 1;
                 }
             } else if let syn::Expr::MethodCall(mcall) = &*node.receiver
-                && mcall.method == "spawn" {
-                    self.inline_join_count += 1;
-                }
+                && mcall.method == "spawn"
+            {
+                self.inline_join_count += 1;
+            }
         } else if name == "spawn" {
             self.has_spawn = true;
             self.spawn_count += 1;
@@ -355,7 +359,13 @@ struct CachePaddingVisitor {
 impl<'ast> Visit<'ast> for CachePaddingVisitor {
     fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
         let tokens = quote::quote!(#node).to_string();
-        if tokens.contains("Atomic") || tokens.contains("Mutex") || tokens.contains("RwLock") || tokens.contains("SpinLock") || tokens.contains("Cache") || tokens.contains("Shared") {
+        if tokens.contains("Atomic")
+            || tokens.contains("Mutex")
+            || tokens.contains("RwLock")
+            || tokens.contains("SpinLock")
+            || tokens.contains("Cache")
+            || tokens.contains("Shared")
+        {
             self.has_structs_or_enums = true;
         }
         syn::visit::visit_item_struct(self, node);
@@ -363,7 +373,13 @@ impl<'ast> Visit<'ast> for CachePaddingVisitor {
 
     fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
         let tokens = quote::quote!(#node).to_string();
-        if tokens.contains("Atomic") || tokens.contains("Mutex") || tokens.contains("RwLock") || tokens.contains("SpinLock") || tokens.contains("Cache") || tokens.contains("Shared") {
+        if tokens.contains("Atomic")
+            || tokens.contains("Mutex")
+            || tokens.contains("RwLock")
+            || tokens.contains("SpinLock")
+            || tokens.contains("Cache")
+            || tokens.contains("Shared")
+        {
             self.has_structs_or_enums = true;
         }
         syn::visit::visit_item_enum(self, node);
@@ -697,6 +713,186 @@ pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
     violations
 }
 
+pub fn analyze_aerospace_grade_structured(
+    source_file: &Path,
+) -> Vec<crate::assurance::StaticFinding> {
+    let violations = analyze_aerospace_grade(source_file);
+    let mut findings = crate::assurance::structured_findings(violations, Some(source_file));
+    findings.extend(analyze_covopt_bench(source_file));
+    findings.extend(analyze_unsafe_macro_capabilities(source_file));
+    findings
+}
+
+pub fn analyze_unsafe_macro_capabilities(
+    source_file: &Path,
+) -> Vec<crate::assurance::StaticFinding> {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return Vec::new();
+    };
+    let Ok(ast) = syn::parse_file(&content) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for item in ast.items {
+        let (name, line) = match item {
+            syn::Item::Macro(item) => (
+                item.mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|segment| segment.ident.to_string()),
+                item.mac.path.span().start().line,
+            ),
+            syn::Item::Struct(item) => (
+                item.attrs.iter().find_map(|attr| {
+                    if !attr.path().is_ident("covopt_hoist") {
+                        return None;
+                    }
+                    attr.path()
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                }),
+                item.ident.span().start().line,
+            ),
+            _ => (None, 0),
+        };
+        if matches!(
+            name.as_deref(),
+            Some("covopt_qsbr_registry" | "covopt_hoist")
+        ) {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::MemorySafety,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Critical,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line,
+                }),
+                explanation: format!(
+                    "unsafe codegen capability `{}` requires explicit lifetime, sanitizer, Miri, and bounded atomic verification",
+                    name.unwrap_or_default()
+                ),
+                remediation: "run the specialized unsafe evidence plan; ordinary fix --apply is blocked".to_string(),
+            });
+        }
+    }
+    findings
+}
+
+struct BenchDceVisitor {
+    explicit_black_box: bool,
+    loop_count: usize,
+}
+
+impl<'ast> Visit<'ast> for BenchDceVisitor {
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*node.func
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "black_box")
+        {
+            self.explicit_black_box = true;
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_while(self, node);
+    }
+
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_loop(self, node);
+    }
+}
+
+pub fn analyze_covopt_bench(source_file: &Path) -> Vec<crate::assurance::StaticFinding> {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return Vec::new();
+    };
+    let Ok(ast) = syn::parse_file(&content) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for item in ast.items {
+        let syn::Item::Fn(item_fn) = item else {
+            continue;
+        };
+        if !item_fn.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "covopt_bench")
+        }) {
+            continue;
+        }
+        let mut visitor = BenchDceVisitor {
+            explicit_black_box: false,
+            loop_count: 0,
+        };
+        visitor.visit_block(&item_fn.block);
+        if !visitor.explicit_black_box {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Medium,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` has incomplete explicit Anti-DCE evidence: {} loop(s) and no user black_box; the marker wrapper only protects its returned value",
+                    item_fn.sig.ident,
+                    visitor.loop_count
+                ),
+                remediation: "black_box benchmark inputs and the measured output, then rerun static verification".to_string(),
+            });
+        }
+        if item_fn.sig.inputs.is_empty() {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Low,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` has no explicit input parameter; input construction and loop-variable use require review",
+                    item_fn.sig.ident
+                ),
+                remediation: "make benchmark input construction explicit or document the generated input domain".to_string(),
+            });
+        }
+        if matches!(item_fn.sig.output, syn::ReturnType::Default) {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Medium,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` returns unit; black_box on unit does not establish that loop output is observable",
+                    item_fn.sig.ident
+                ),
+                remediation: "return or explicitly black_box the measured output".to_string(),
+            });
+        }
+    }
+    findings
+}
+
 struct WatchdogVisitor {
     has_watchdog: bool,
 }
@@ -882,44 +1078,48 @@ pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
 pub fn parse_covopt_attr_tokens(
     token_str: &str,
 ) -> (Option<String>, Option<String>, Option<String>) {
-    let mut expected = None;
-    let mut n_values = None;
-    let mut target_fn = None;
-
-    for key in &["expected", "n_values", "target_fn"] {
-        if let Some(pos) = token_str.find(key) {
-            let after_key = token_str[pos + key.len()..].trim_start();
-            if let Some(after_eq) = after_key.strip_prefix('=') {
-                let val_part = after_eq.trim_start();
-                let extracted = extract_attr_val(val_part);
-                match *key {
-                    "expected" => expected = Some(clean_expected_str(&extracted)),
-                    "n_values" => n_values = Some(clean_n_values_str(&extracted)),
-                    "target_fn" => target_fn = Some(clean_generic_str(&extracted)),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    (expected, n_values, target_fn)
+    let fields = parse_attribute_fields(token_str);
+    (
+        fields
+            .get("expected")
+            .map(|value| clean_expected_str(value)),
+        fields
+            .get("n_values")
+            .map(|value| clean_n_values_str(value)),
+        fields
+            .get("target_fn")
+            .map(|value| clean_generic_str(value)),
+    )
 }
 
-fn extract_attr_val(s: &str) -> String {
-    let s = s.trim();
-    if let Some(rest) = s.strip_prefix('"') {
-        if let Some(end) = rest.find('"') {
-            return rest[..end].to_string();
-        }
-    } else if let Some(rest) = s.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return rest[..end].to_string();
-        }
+fn parse_attribute_fields(token_str: &str) -> std::collections::BTreeMap<String, String> {
+    let Ok(fields) = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+        .parse_str(token_str)
+    else {
+        return std::collections::BTreeMap::new();
+    };
+    fields
+        .into_iter()
+        .filter_map(|meta| match meta {
+            syn::Meta::NameValue(value) => Some((
+                value.path.get_ident()?.to_string(),
+                value_expr_to_string(&value.value),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn value_expr_to_string(value: &syn::Expr) -> String {
+    if let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(value),
+        ..
+    }) = value
+    {
+        value.value()
     } else {
-        let end = s.find(',').unwrap_or(s.len());
-        return s[..end].trim().to_string();
+        value.to_token_stream().to_string()
     }
-    s.to_string()
 }
 
 fn clean_expected_str(val: &str) -> String {
@@ -942,6 +1142,381 @@ fn clean_n_values_str(val: &str) -> String {
 
 fn clean_generic_str(val: &str) -> String {
     val.trim().trim_matches('"').to_string()
+}
+
+fn parse_named_attr_value(token_str: &str, key: &str) -> Option<String> {
+    parse_attribute_fields(token_str)
+        .get(key)
+        .map(|value| clean_generic_str(value))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CovOptTargetMetadata {
+    pub id: String,
+    pub function: String,
+    pub complexity: Option<String>,
+    #[serde(default)]
+    pub criticality: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CovOptEvidenceMetadata {
+    pub target: String,
+    pub n_values: Option<String>,
+    pub seeds: Option<String>,
+    pub function: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SourceMetadataIndex {
+    pub schema_version: u32,
+    pub source_hashes: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub parameters: Vec<ParameterDescriptor>,
+    pub targets: Vec<CovOptTargetMetadata>,
+    pub evidence: Vec<CovOptEvidenceMetadata>,
+}
+
+impl SourceMetadataIndex {
+    pub fn build(root: &Path) -> Self {
+        let mut source_hashes = std::collections::BTreeMap::new();
+        let mut parameters = Vec::new();
+        let mut targets = Vec::new();
+        let mut evidence = Vec::new();
+        for path in source_files(root) {
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            source_hashes.insert(
+                path.display().to_string(),
+                crate::repair::SourceEdit::hash_source(&content),
+            );
+            let Ok(ast) = syn::parse_file(&content) else {
+                continue;
+            };
+            if let Ok(graph) = crate::parameters::ParameterDependencyGraph::from_source(
+                &content,
+                &path.display().to_string(),
+            ) {
+                parameters.extend(
+                    graph
+                        .parameters
+                        .into_values()
+                        .map(|record| record.descriptor),
+                );
+            }
+            for item in ast.items {
+                let syn::Item::Fn(item_fn) = item else {
+                    continue;
+                };
+                for attr in &item_fn.attrs {
+                    let Some(name) = attr
+                        .path()
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                    else {
+                        continue;
+                    };
+                    let syn::Meta::List(list) = &attr.meta else {
+                        continue;
+                    };
+                    let fields = parse_attribute_fields(&list.tokens.to_string());
+                    match name.as_str() {
+                        "target" | "covopt_target" => targets.push(CovOptTargetMetadata {
+                            id: fields
+                                .get("id")
+                                .map(|value| clean_generic_str(value))
+                                .unwrap_or_else(|| item_fn.sig.ident.to_string()),
+                            function: item_fn.sig.ident.to_string(),
+                            complexity: fields
+                                .get("complexity")
+                                .map(|value| clean_generic_str(value)),
+                            criticality: fields
+                                .get("criticality")
+                                .map(|value| clean_generic_str(value)),
+                            scope: fields.get("scope").map(|value| clean_generic_str(value)),
+                            file: path.clone(),
+                            line: item_fn.sig.ident.span().start().line,
+                        }),
+                        "evidence" | "covopt_evidence" => {
+                            if let Some(target) = fields.get("target") {
+                                evidence.push(CovOptEvidenceMetadata {
+                                    target: clean_generic_str(target),
+                                    n_values: fields
+                                        .get("n")
+                                        .or_else(|| fields.get("n_values"))
+                                        .map(|value| clean_generic_str(value)),
+                                    seeds: fields
+                                        .get("seeds")
+                                        .or_else(|| fields.get("seed"))
+                                        .map(|value| clean_generic_str(value)),
+                                    function: item_fn.sig.ident.to_string(),
+                                    file: path.clone(),
+                                    line: item_fn.sig.ident.span().start().line,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        targets.sort_by(|left, right| left.id.cmp(&right.id));
+        parameters.sort_by(|left, right| left.id.cmp(&right.id));
+        parameters.dedup_by(|left, right| left.id == right.id);
+        evidence.sort_by(|left, right| left.file.cmp(&right.file).then(left.line.cmp(&right.line)));
+        Self {
+            schema_version: covopt_schema::SCHEMA_VERSION,
+            source_hashes,
+            parameters,
+            targets,
+            evidence,
+        }
+    }
+
+    pub fn load_or_build(root: &Path) -> Self {
+        let cache = root.join("target/covopt/metadata-index.json");
+        let current_hashes = source_files(root)
+            .into_iter()
+            .filter_map(|path| {
+                fs::read_to_string(&path).ok().map(|content| {
+                    (
+                        path.display().to_string(),
+                        crate::repair::SourceEdit::hash_source(&content),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if let Ok(content) = fs::read_to_string(&cache)
+            && let Ok(index) = serde_json::from_str::<Self>(&content)
+            && index.schema_version == covopt_schema::SCHEMA_VERSION
+            && index.source_hashes == current_hashes
+        {
+            return index;
+        }
+        let index = Self::build(root);
+        if let Some(parent) = cache.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_vec_pretty(&index) {
+            let _ = fs::write(cache, content);
+        }
+        index
+    }
+}
+
+fn source_files(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt" | ".agents"
+            )
+        })
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("rs"))
+        .map(|entry| entry.path().to_path_buf())
+        .collect()
+}
+
+pub fn find_covopt_target_metadata(target_id: &str) -> Option<CovOptTargetMetadata> {
+    if let Some(metadata) = SourceMetadataIndex::load_or_build(Path::new("."))
+        .targets
+        .into_iter()
+        .find(|metadata| metadata.id == target_id)
+    {
+        return Some(metadata);
+    }
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "target" | "covopt_target"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                let id = parse_named_attr_value(&tokens, "id")
+                    .unwrap_or_else(|| item_fn.sig.ident.to_string());
+                if id != target_id {
+                    continue;
+                }
+                return Some(CovOptTargetMetadata {
+                    id,
+                    function: item_fn.sig.ident.to_string(),
+                    complexity: parse_named_attr_value(&tokens, "complexity"),
+                    criticality: parse_named_attr_value(&tokens, "criticality"),
+                    scope: parse_named_attr_value(&tokens, "scope"),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    None
+}
+
+pub fn find_all_covopt_target_metadata() -> Vec<CovOptTargetMetadata> {
+    let mut indexed = SourceMetadataIndex::load_or_build(Path::new(".")).targets;
+    indexed.dedup_by(|left, right| left.id == right.id);
+    if !indexed.is_empty() {
+        return indexed;
+    }
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    let mut results = Vec::new();
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "target" | "covopt_target"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                results.push(CovOptTargetMetadata {
+                    id: parse_named_attr_value(&tokens, "id")
+                        .unwrap_or_else(|| item_fn.sig.ident.to_string()),
+                    function: item_fn.sig.ident.to_string(),
+                    complexity: parse_named_attr_value(&tokens, "complexity"),
+                    criticality: parse_named_attr_value(&tokens, "criticality"),
+                    scope: parse_named_attr_value(&tokens, "scope"),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    results.sort_by(|left, right| left.id.cmp(&right.id));
+    results.dedup_by(|left, right| left.id == right.id);
+    results
+}
+
+pub fn find_covopt_evidence_metadata(target_id: &str) -> Vec<CovOptEvidenceMetadata> {
+    let indexed = SourceMetadataIndex::load_or_build(Path::new("."))
+        .evidence
+        .into_iter()
+        .filter(|metadata| metadata.target == target_id)
+        .collect::<Vec<_>>();
+    if !indexed.is_empty() {
+        return indexed;
+    }
+    let mut results = Vec::new();
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "evidence" | "covopt_evidence"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                let Some(target) = parse_named_attr_value(&tokens, "target") else {
+                    continue;
+                };
+                if target != target_id {
+                    continue;
+                }
+                results.push(CovOptEvidenceMetadata {
+                    target,
+                    n_values: parse_named_attr_value(&tokens, "n"),
+                    seeds: parse_named_attr_value(&tokens, "seeds"),
+                    function: item_fn.sig.ident.to_string(),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    results.sort_by(|left, right| left.file.cmp(&right.file).then(left.line.cmp(&right.line)));
+    results
 }
 
 pub fn find_covopt_test_metadata(
@@ -1007,16 +1582,39 @@ pub fn find_covopt_test_metadata(
 }
 
 pub fn find_package_for_file(path: &Path) -> Option<String> {
-    let mut current_dir = path.parent();
+    let absolute_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut current_dir = absolute_path.parent();
     while let Some(dir) = current_dir {
         let cargo_toml = dir.join("Cargo.toml");
         if cargo_toml.exists()
             && let Ok(content) = fs::read_to_string(&cargo_toml)
-            && let Ok(value) = content.parse::<toml::Value>()
-            && let Some(pkg) = value.get("package")
-            && let Some(name) = pkg.get("name").and_then(|n| n.as_str())
         {
-            return Some(name.to_string());
+            if let Ok(value) = content.parse::<toml::Value>()
+                && let Some(name) = value
+                    .get("package")
+                    .and_then(|package| package.get("name"))
+                    .and_then(|name| name.as_str())
+            {
+                return Some(name.to_string());
+            }
+
+            // Keep package discovery working with Cargo manifests that
+            // use syntax newer than the embedded TOML parser understands.
+            let mut in_package = false;
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_package = line == "[package]";
+                } else if in_package
+                    && let Some(value) = line.strip_prefix("name")
+                    && let Some(value) = value.trim_start().strip_prefix('=')
+                {
+                    let name = value.trim().trim_matches('"').trim_matches('\'');
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
         }
         current_dir = dir.parent();
     }
@@ -1034,6 +1632,46 @@ pub fn resolve_package_for_target(
         && let Some(pkg) = find_package_for_file(&path)
     {
         return Some(pkg);
+    }
+    if let Some(metadata) = find_covopt_target_metadata(test_name)
+        && let Some(pkg) = find_package_for_file(&metadata.file)
+    {
+        return Some(pkg);
+    }
+
+    // Metadata can be unavailable when a fixture uses a macro form that is not
+    // parseable in the current toolchain. The conventional integration-test
+    // filename is still a safe package hint; fall back to it before compiling
+    // the entire workspace.
+    let mut candidates = vec![
+        PathBuf::from("tests").join(format!("{test_name}.rs")),
+        PathBuf::from("CovOpt-Analyzer/tests").join(format!("{test_name}.rs")),
+    ];
+    if let Ok(entries) = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        candidates.extend(entries.into_iter().filter_map(|entry| {
+            let path = entry.into_path();
+            (path.extension().and_then(|value| value.to_str()) == Some("rs")
+                && path.file_stem().and_then(|value| value.to_str()) == Some(test_name))
+            .then_some(path)
+        }));
+    }
+    candidates.sort();
+    candidates.dedup();
+    for path in candidates {
+        if path.is_file()
+            && let Some(pkg) = find_package_for_file(&path)
+        {
+            return Some(pkg);
+        }
     }
     None
 }
@@ -1143,4 +1781,38 @@ pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_package_for_target;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn resolves_workspace_package_for_configured_test() {
+        let package = resolve_package_for_target("binary_search", None);
+        assert_eq!(package.as_deref(), Some("CovOpt-Analyzer"));
+    }
+
+    #[test]
+    fn discovers_target_and_evidence_annotations() {
+        let target = super::find_covopt_target_metadata("binary_search")
+            .expect("binary_search target annotation");
+        assert_eq!(target.function, "compute_binary_search");
+        assert_eq!(target.complexity.as_deref(), Some("O(log N)"));
+        let evidence = super::find_covopt_evidence_metadata("binary_search");
+        assert!(evidence.iter().any(|item| item.function == "binary_search"));
+    }
+
+    #[test]
+    fn metadata_index_is_versioned_and_cacheable() {
+        let index = super::SourceMetadataIndex::load_or_build(Path::new("."));
+        assert_eq!(index.schema_version, covopt_schema::SCHEMA_VERSION);
+        assert!(index.targets.iter().any(|item| item.id == "binary_search"));
+        let cached =
+            fs::read_to_string("target/covopt/metadata-index.json").expect("metadata index cache");
+        let decoded: super::SourceMetadataIndex = serde_json::from_str(&cached).unwrap();
+        assert_eq!(decoded.source_hashes, index.source_hashes);
+    }
 }

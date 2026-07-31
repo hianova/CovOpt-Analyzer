@@ -1,6 +1,61 @@
 use covopt_macro::covopt_param;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardeningResult {
+    pub provider: String,
+    pub target: String,
+    pub passed: bool,
+    pub summary: String,
+}
+
+pub fn run_sanitizer_structured(
+    test_name: &str,
+    san_type: &str,
+    auto_fix: bool,
+) -> HardeningResult {
+    let passed = run_sanitizer(test_name, san_type, auto_fix);
+    HardeningResult {
+        provider: format!("sanitizer:{san_type}"),
+        target: test_name.to_string(),
+        passed,
+        summary: if passed {
+            "sanitizer execution passed".to_string()
+        } else {
+            "sanitizer execution failed or was unavailable".to_string()
+        },
+    }
+}
+
+pub fn run_mutants_structured(test_name: &str) -> HardeningResult {
+    let passed = run_mutants(test_name);
+    HardeningResult {
+        provider: "mutation".to_string(),
+        target: test_name.to_string(),
+        passed,
+        summary: if passed {
+            "mutation execution passed".to_string()
+        } else {
+            "mutation execution failed or was unavailable".to_string()
+        },
+    }
+}
+
+pub fn run_fuzz_structured(target_name: &str) -> HardeningResult {
+    let passed = run_fuzz(target_name);
+    HardeningResult {
+        provider: "fuzz".to_string(),
+        target: target_name.to_string(),
+        passed,
+        summary: if passed {
+            "fuzz execution passed".to_string()
+        } else {
+            "fuzz execution failed or was unavailable".to_string()
+        },
+    }
+}
 
 fn check_command_exists(cmd: &str, install_hint: &str) -> bool {
     let status = if let Some(sub) = cmd.strip_prefix("cargo-") {
@@ -323,7 +378,13 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
             .env("RUSTFLAGS", &z_sanitizer);
 
         let success = if auto_fix {
-            let output = cmd.output().expect("Failed to run sanitizer test");
+            let output = match cmd.output() {
+                Ok(output) => output,
+                Err(error) => {
+                    eprintln!("Failed to run sanitizer test: {}", error);
+                    return false;
+                }
+            };
             let stdout_str = String::from_utf8_lossy(&output.stdout);
             let stderr_str = String::from_utf8_lossy(&output.stderr);
 
@@ -380,9 +441,20 @@ pub fn run_sanitizer(test_name: &str, san_type: &str, auto_fix: bool) -> bool {
                 false
             }
         } else {
-            let mut child = cmd.spawn().expect("Failed to start sanitizers");
-            let status = child.wait().expect("Failed to wait for sanitizer test");
-            status.success()
+            let mut child = match cmd.spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    eprintln!("Failed to start sanitizers: {}", error);
+                    return false;
+                }
+            };
+            match child.wait() {
+                Ok(status) => status.success(),
+                Err(error) => {
+                    eprintln!("Failed to wait for sanitizer test: {}", error);
+                    return false;
+                }
+            }
         };
 
         if success {

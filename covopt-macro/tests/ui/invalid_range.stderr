@@ -1,0 +1,5 @@
+error: parameter range needs an upper bound
+ --> tests/ui/invalid_range.rs:4:47
+  |
+4 |     let _ = covopt_param!("range", 1, range = 1..);
+  |                                               ^^^

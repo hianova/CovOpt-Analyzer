@@ -8,7 +8,78 @@ use syn::{ExprCall, ExprForLoop, ExprMethodCall, ExprWhile, ItemFn};
 pub struct EncapsulationAdvisor;
 
 pub struct AdviseReport {
-    pub warnings: Vec<String>,
+    pub warnings: Vec<crate::findings::Finding>,
+    pub findings: Vec<crate::findings::Finding>,
+}
+
+fn report_from_warnings(warnings: Vec<String>) -> AdviseReport {
+    let findings = warnings
+        .iter()
+        .map(|warning| {
+            let kind = finding_kind_from_warning(warning);
+            let line = warning
+                .split("Line ")
+                .nth(1)
+                .and_then(|value| value.split(|ch: char| !ch.is_ascii_digit()).next())
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1);
+            let id = crate::findings::stable_finding_id(kind, "<advisor>", line, None);
+            crate::findings::Finding::new(
+                id.0,
+                kind,
+                crate::assurance::Severity::Medium,
+                "<advisor>",
+                line,
+                None,
+            )
+            .modeled()
+        })
+        .collect::<Vec<_>>();
+    AdviseReport {
+        warnings: findings.clone(),
+        findings,
+    }
+}
+
+fn finding_kind_from_warning(warning: &str) -> crate::findings::FindingKind {
+    use crate::findings::FindingKind;
+    let lower = warning.to_ascii_lowercase();
+    if lower.contains("generic") {
+        FindingKind::GenericBloat
+    } else if lower.contains("parameter") {
+        FindingKind::ExcessiveParameters
+    } else if lower.contains("clone") || lower.contains("allocation") {
+        if lower.contains("clone") {
+            FindingKind::CloneInHotLoop
+        } else {
+            FindingKind::AllocationInHotLoop
+        }
+    } else if lower.contains("blocking") {
+        FindingKind::BlockingInAsync
+    } else if lower.contains("mutex") || lower.contains("lock") {
+        FindingKind::LockInHotLoop
+    } else if lower.contains("println") || lower.contains("io") {
+        FindingKind::IoInHotLoop
+    } else if lower.contains("compare_exchange") || lower.contains("cas") {
+        FindingKind::ManualCasLoop
+    } else if lower.contains("false sharing") || lower.contains("padding") {
+        FindingKind::FalseSharing
+    } else if lower.contains("clone detected") {
+        FindingKind::SemanticAsmClone
+    } else if lower.contains("inline") || lower.contains("simd") || lower.contains("ipc") {
+        FindingKind::MissingInlining
+    } else {
+        FindingKind::HotColdMixing
+    }
+}
+
+impl AdviseReport {
+    pub fn legacy_warnings(&self) -> Vec<String> {
+        self.findings
+            .iter()
+            .map(crate::findings::FindingFormatter::short)
+            .collect()
+    }
 }
 
 impl EncapsulationAdvisor {
@@ -113,7 +184,7 @@ impl EncapsulationAdvisor {
             }
         }
 
-        AdviseReport { warnings }
+        report_from_warnings(warnings)
     }
 
     pub fn analyze_struct(item_struct: &syn::ItemStruct) -> AdviseReport {
@@ -142,7 +213,7 @@ impl EncapsulationAdvisor {
             ));
         }
 
-        AdviseReport { warnings }
+        report_from_warnings(warnings)
     }
     fn is_pure_pass_through(item_fn: &ItemFn) -> bool {
         // Very basic heuristic: if it has exactly 1 statement which is an expression.

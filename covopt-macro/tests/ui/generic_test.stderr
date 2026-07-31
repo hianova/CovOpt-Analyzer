@@ -1,0 +1,5 @@
+error: #[covopt_test] does not support generic functions
+ --> tests/ui/generic_test.rs:4:16
+  |
+4 | fn generic_test<T>(n: usize) {
+  |                ^^^

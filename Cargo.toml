@@ -1,9 +1,9 @@
 [workspace]
-members = ["covopt-macro", "CovOpt-Analyzer"]
+members = ["covopt-schema", "covopt-macro", "CovOpt-Analyzer"]
 resolver = "2"
 
 [profile.dev]
-incremental = false
+incremental = true
 split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]

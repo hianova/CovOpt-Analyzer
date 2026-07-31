@@ -3,21 +3,23 @@ pub mod auto_fixer;
 pub mod auto_harness;
 pub mod ci;
 pub mod commands;
+pub mod concurrency_fuzzer;
 pub mod dashboard;
 pub mod explore;
 pub mod harden;
-pub mod concurrency_fuzzer;
 
-use clap::{Parser, Subcommand};
 use CovOpt_Analyzer::config::{
-    AdviseArgs, AuditArgs, CiArgs, FixArgs, FuzzArgs, HardenArgs, InitArgs, ProfileArgs, ReportArgs, RunArgs,
+    AdviseArgs, AtomicArgs, AuditArgs, CheckArgs, CiArgs, FixArgs, FuzzArgs, HardenArgs, InitArgs,
+    InspectCommandArgs, PlanArgs, ProfileArgs, ReportArgs, RunArgs, SelectTrialsArgs,
+    UnifiedOptimizeArgs, VerifyArgs,
 };
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "covopt")]
 #[command(author, version, about = "Coverage-based Complexity & Safety Analyzer")]
 #[command(
-    after_help = "EXAMPLES:\n  1. Quick setup:          covopt init\n  2. Audit codebase:       covopt audit\n  3. Auto-fix & optimize:  covopt fix\n  4. Senior Advisor:       covopt advise\n  5. Profile CPU hotspots: covopt profile --test my_test\n  6. Auto-Pilot Pipeline:  covopt ci"
+    after_help = "EXAMPLES:\n  1. Setup:                covopt init\n  2. Check guarantees:     covopt check --mode adaptive\n  3. Explain findings:     covopt inspect --format json\n  4. Explore candidates:   covopt optimize codegen\n  5. Apply repairs:        covopt fix --plan --apply\n  6. Force evidence:       covopt verify coverage"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,28 +34,59 @@ pub enum Commands {
     /// Initialize a default .covopt.toml and inject AI Agent rules
     Init(InitArgs),
 
-    /// Unified Auto-Pilot Pipeline (Fix -> Audit -> Report)
-    Ci(CiArgs),
+    /// Check obligations and collect planner-selected evidence
+    Check(CheckArgs),
 
-    /// Generate visual HTML or SARIF dashboard report
-    Report(ReportArgs),
+    /// Explain structured findings and repair candidates
+    Inspect(InspectCommandArgs),
 
-    /// Automatic code repair (Clippy fixes + covopt_param! substitution)
+    /// Search optimization candidates without applying them
+    Optimize(UnifiedOptimizeArgs),
+
+    /// Plan or apply a minimal repair set
     Fix(FixArgs),
 
-    /// Audit time/space complexity, IPC coverage & entropy across targets
+    /// Force execution of a dynamic evidence provider
+    Verify(VerifyArgs),
+
+    /// Legacy CI alias
+    #[command(hide = true)]
+    Ci(CiArgs),
+
+    /// Legacy report alias
+    #[command(hide = true)]
+    Report(ReportArgs),
+
+    /// Legacy audit alias
+    #[command(hide = true)]
     Audit(AuditArgs),
 
-    /// Senior Engineer Advisor: Detect hot-path allocations, async blocking & lock contention
+    /// Plan the lowest-cost evidence actions without executing them
+    #[command(hide = true)]
+    Plan(PlanArgs),
+
+    /// Select a deterministic, budgeted target/N/seed trial set without running tests
+    #[command(hide = true)]
+    SelectTrials(SelectTrialsArgs),
+
+    /// Analyze or synthesize opt-in atomic orderings
+    #[command(hide = true)]
+    Atomic(AtomicArgs),
+
+    /// Deprecated compatibility alias
+    #[command(hide = true)]
     Advise(AdviseArgs),
 
     /// CPU hotspot & lock contention profiler (Flamegraph & Samply)
+    #[command(hide = true)]
     Profile(ProfileArgs),
 
     /// Robustness & Security Hardening (Mutation, Fuzzing, Sanitizers)
+    #[command(hide = true)]
     Harden(HardenArgs),
 
     /// Adversarial Concurrency Fuzzer (AST-based In-Process Heuristic Fuzzing)
+    #[command(hide = true)]
     Fuzz(FuzzArgs),
 }
 
@@ -68,153 +101,218 @@ fn main() {
         Some(Commands::Init(args)) => {
             if args.hook {
                 commands::install_hook();
+            } else if args.migrate {
+                commands::migrate_config(args.path.as_deref());
             } else {
                 commands::init_config(args);
             }
         }
-        Some(Commands::Fix(args)) => {
-            let run_all = !args.only_clippy && !args.only_magic;
-            if args.only_clippy || run_all {
-                commands::run_fix(args.path.clone());
+        Some(Commands::Check(args)) => {
+            if let Err(error) = commands::run_check(&args) {
+                eprintln!("CovOpt check: {error}");
+                std::process::exit(1);
             }
-            if args.only_magic || run_all {
-                CovOpt_Analyzer::scanner::run_scan(args.path, true, false);
+        }
+        Some(Commands::Fix(args)) => {
+            if args.plan || args.apply {
+                if !commands::run_repair_plan(&args) {
+                    std::process::exit(1);
+                }
+            } else {
+                let run_all = !args.only_clippy
+                    && !args.only_magic
+                    && !args.legacy_clippy
+                    && !args.legacy_magic;
+                if args.only_clippy || args.legacy_clippy || run_all {
+                    commands::run_fix(args.path.clone());
+                }
+                if (args.only_magic || args.legacy_magic || run_all)
+                    && let Err(error) = CovOpt_Analyzer::scanner::run_scan(args.path, true, false)
+                {
+                    eprintln!("CovOpt fix: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(Commands::Verify(args)) => {
+            if !commands::run_verify(&args) {
+                std::process::exit(1);
             }
         }
         Some(Commands::Report(args)) => {
-            let engine = dashboard::DashboardGenerator::new(&args.output_dir);
-            let res = if args.format == "sarif" {
-                engine.generate_sarif()
-            } else {
-                engine.generate()
-            };
-            if let Err(e) = res {
-                eprintln!("CovOpt Error: {:?}", e);
+            eprintln!("covopt report is a compatibility alias; use covopt check --format");
+            if let Err(error) = commands::run_check(&CheckArgs {
+                base: None,
+                target: None,
+                mode: Some(CovOpt_Analyzer::assurance::AssurancePolicy::Adaptive),
+                plan: false,
+                format: args.format,
+                fast: false,
+                staged: false,
+                debug_artifacts: false,
+                budget: "5m".to_string(),
+            }) {
+                eprintln!("CovOpt Error: {error}");
                 std::process::exit(1);
             }
         }
-        Some(Commands::Audit(args)) => commands::run_audit(&args),
-        Some(Commands::Profile(args)) => {
-            if !CovOpt_Analyzer::profiler::run_profile(
-                args.test.as_deref(),
-                args.bin.as_deref(),
-                &args.tool,
-            ) {
+        Some(Commands::Audit(args)) => {
+            eprintln!("covopt audit is a compatibility alias; use covopt check --mode strict");
+            if let Err(error) = commands::run_check(&CheckArgs {
+                base: args.base,
+                target: args.test,
+                mode: Some(CovOpt_Analyzer::assurance::AssurancePolicy::Strict),
+                plan: false,
+                format: if args.json {
+                    "json".to_string()
+                } else {
+                    "text".to_string()
+                },
+                fast: args.fast,
+                staged: args.staged,
+                debug_artifacts: args.debug_artifacts,
+                budget: "5m".to_string(),
+            }) {
+                eprintln!("CovOpt audit: {error}");
                 std::process::exit(1);
             }
         }
-        Some(Commands::Advise(args)) => {
-            if let Err(e) = commands::run_advise(&args) {
-                eprintln!("CovOpt Error: {:?}", e);
-                std::process::exit(1);
-            }
-            CovOpt_Analyzer::dataflow::run_dataflow(Some(args.path.clone()));
-        }
-        Some(Commands::Harden(args)) => {
-            if args.generate_harness {
-                let engine = auto_harness::AutoHarness::new(&args.path);
-                if let Err(e) = engine.generate() {
-                    eprintln!("CovOpt Error: {:?}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                let test = match &args.test {
-                    Some(t) => t,
-                    None => {
-                        eprintln!(
-                            "Error: The name of the test target is required when running hardening tests."
-                        );
-                        std::process::exit(1);
-                    }
-                };
-                let mut success = true;
-                let run_all = !args.mutate && !args.fuzz && !args.sanitize;
-
-                if args.mutate || run_all {
-                    let mutants_installed = std::process::Command::new("cargo")
-                        .arg("mutants")
-                        .arg("--version")
-                        .output()
-                        .is_ok_and(|out| out.status.success());
-
-                    if !mutants_installed {
-                        if !args.fast {
-                            eprintln!("Error: cargo-mutants is not installed.");
-                            std::process::exit(1);
-                        } else {
-                            println!("[Pre-flight] Skipping cargo-mutants (not installed).");
-                        }
-                    } else if !harden::run_mutants(test) {
-                        success = false;
-                    }
-                }
-                if (args.sanitize || run_all)
-                    && success
-                    && !harden::run_sanitizer(test, &args.san_type, args.auto_fix)
-                {
-                    success = false;
-                }
-                if args.fuzz || run_all {
-                    let fuzz_installed = std::process::Command::new("cargo")
-                        .arg("fuzz")
-                        .arg("--version")
-                        .output()
-                        .is_ok_and(|out| out.status.success());
-
-                    if !fuzz_installed {
-                        if !args.fast {
-                            eprintln!("Error: cargo-fuzz is not installed.");
-                            std::process::exit(1);
-                        } else {
-                            println!("[Pre-flight] Skipping cargo-fuzz (not installed).");
-                        }
-                    } else if success && !harden::run_fuzz(test) {
-                        success = false;
-                    }
-                }
-
-                if !success {
-                    std::process::exit(1);
-                }
-            }
-        }
-        Some(Commands::Ci(args)) => {
+        Some(Commands::Plan(args)) => {
             let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
-                Ok(c) => c,
-                Err(e) => {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("CovOpt plan: failed to load .covopt.toml: {}", error);
+                    std::process::exit(1);
+                }
+            };
+            if !commands::run_plan(&args, &config) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::SelectTrials(args)) => {
+            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
+                Ok(config) => config,
+                Err(error) => {
                     eprintln!(
-                        "CovOpt-Analyzer: Failed to load config (.covopt.toml) - {}",
-                        e
+                        "CovOpt select-trials: failed to load .covopt.toml: {}",
+                        error
                     );
                     std::process::exit(1);
                 }
             };
-            if let Err(e) = ci::run_pipeline(config, &args) {
-                eprintln!("CI Pipeline failed: {}", e);
+            if !commands::run_select_trials(&args, &config) {
                 std::process::exit(1);
             }
-            if args.report || args.sarif {
-                let engine = dashboard::DashboardGenerator::new("target/covopt");
-                let res = if args.sarif {
-                    engine.generate_sarif()
-                } else {
-                    engine.generate()
-                };
-                if let Err(e) = res {
-                    eprintln!("CovOpt Error generating report: {:?}", e);
+        }
+        Some(Commands::Atomic(args)) => {
+            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("CovOpt atomic: failed to load .covopt.toml: {}", error);
                     std::process::exit(1);
                 }
+            };
+            if !commands::run_atomic(&args, &config) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Optimize(args)) => {
+            if !commands::run_unified_optimize(&args) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Profile(args)) => {
+            eprintln!("covopt profile is a compatibility alias; use covopt verify runtime");
+            if !commands::run_verify(&VerifyArgs {
+                command: CovOpt_Analyzer::config::VerifySubcommand::Runtime(
+                    CovOpt_Analyzer::config::VerifyRuntimeArgs {
+                        target: args.test,
+                        tool: args.tool,
+                        bin: args.bin,
+                        json: false,
+                    },
+                ),
+            }) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Inspect(args)) => {
+            if let Err(e) = commands::run_inspect_command(&args) {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Advise(args)) => {
+            eprintln!("covopt advise is a compatibility alias; use covopt inspect");
+            if let Err(e) = commands::run_inspect(&args) {
+                eprintln!("CovOpt Error: {:?}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Harden(args)) => {
+            eprintln!("covopt harden is a compatibility alias; use covopt verify safety");
+            let Some(target) = args.test else {
+                eprintln!("covopt verify safety requires --target");
+                std::process::exit(1);
+            };
+            if !commands::run_verify(&VerifyArgs {
+                command: CovOpt_Analyzer::config::VerifySubcommand::Safety(
+                    CovOpt_Analyzer::config::VerifySafetyArgs {
+                        target: Some(target),
+                        sanitizer: args.san_type,
+                        json: false,
+                    },
+                ),
+            }) {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Ci(args)) => {
+            eprintln!("covopt ci is a compatibility alias; use covopt check");
+            let format = if args.sarif {
+                "sarif"
+            } else if args.report {
+                "html"
+            } else {
+                "text"
+            };
+            if let Err(error) = commands::run_check(&CheckArgs {
+                base: args.base,
+                target: None,
+                mode: Some(
+                    args.assurance
+                        .unwrap_or(CovOpt_Analyzer::assurance::AssurancePolicy::Adaptive),
+                ),
+                plan: false,
+                format: format.to_string(),
+                fast: args.fast,
+                staged: false,
+                debug_artifacts: false,
+                budget: args.budget,
+            }) {
+                eprintln!("CI pipeline failed: {error}");
+                std::process::exit(1);
             }
         }
         Some(Commands::Fuzz(args)) => {
-            if let Err(e) = concurrency_fuzzer::run_fuzzer(&args) {
-                eprintln!("Fuzzer Error: {}", e);
+            eprintln!("covopt fuzz is a compatibility alias; use covopt verify concurrency");
+            if !commands::run_verify(&VerifyArgs {
+                command: CovOpt_Analyzer::config::VerifySubcommand::Concurrency(
+                    CovOpt_Analyzer::config::VerifyConcurrencyArgs {
+                        target: Some(args.target),
+                        timeout_ms: args.timeout_ms,
+                        max_iters: args.max_iters,
+                        seed: 0,
+                        json: false,
+                    },
+                ),
+            }) {
                 std::process::exit(1);
             }
         }
         None => {
             if cli.run_args.test.is_some() {
-                if !commands::run_analysis(&cli.run_args, false, None) {
+                if !commands::run_analysis(&cli.run_args, false, None, false, None, None) {
                     std::process::exit(1);
                 }
             } else {
