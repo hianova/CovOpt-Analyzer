@@ -1219,11 +1219,11 @@ fn main() {
     #[test]
     fn cargo_package_name_supports_modern_package_ids() {
         assert_eq!(
-            cargo_package_name("path+file:///workspace#CovOpt-Analyzer@2.0.0"),
+            cargo_package_name("path+file:///workspace#CovOpt-Analyzer@3.0.0"),
             Some("CovOpt-Analyzer")
         );
         assert_eq!(
-            cargo_package_name("path+file:///workspace/CovOpt-Analyzer#2.0.0"),
+            cargo_package_name("path+file:///workspace/CovOpt-Analyzer#3.0.0"),
             Some("CovOpt-Analyzer")
         );
         assert_eq!(

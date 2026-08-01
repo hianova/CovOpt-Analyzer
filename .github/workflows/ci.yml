@@ -24,21 +24,17 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
       - name: Run rustfmt
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable with llvm-tools-preview
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
       - name: Build Debug
@@ -46,14 +42,15 @@ jobs:
       - name: Build Release
         run: cargo build --release --verbose
       - name: Run Tests
-        run: cargo test --verbose
+        run: cargo test --workspace --all-targets --verbose
+      - name: Build Documentation
+        run: cargo doc --workspace --no-deps
       - name: E2E Test
         run: |
-          # Add the release directory to PATH
-          export PATH=$PATH:$(pwd)/target/release
-          # Some documentation assumes 'covopt' is the executable name
-          ln -s $(pwd)/target/release/CovOpt-Analyzer $(pwd)/target/release/covopt || true
-          
+          export PATH="$PATH:$(pwd)/target/release"
+          covopt --version
+          covopt converge --help
+
           # Create a dummy crate
           cargo new dummy_crate
           cd dummy_crate
@@ -81,8 +78,9 @@ jobs:
           }
           EOF
           
-          # Run the analyzer
-          covopt --test test_process_complexity --expected ON --n-values "1000,5000,10000" --target-file src/lib.rs --target-line 5
+          # Exercise the v3 autonomous entry point without workspace writes.
+          covopt converge --authority read-only --format json
+          test -f target/covopt/decision-bundle.json
 
   release:
     name: Build & Upload Release
@@ -98,6 +96,8 @@ jobs:
       - name: Build Release
         run: cargo build --release
       - name: Upload Binary
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: target/release/CovOpt-Analyzer
+          files: |
+            target/release/covopt
+            target/release/cargo-covopt

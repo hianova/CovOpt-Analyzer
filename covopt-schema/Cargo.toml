@@ -1,9 +1,16 @@
 [package]
 name = "covopt-schema"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2024"
 description = "Shared versioned source-contract and parameter metadata for CovOpt"
 license = "MIT"
+repository = "https://github.com/hianova/CovOpt-Analyzer"
+homepage = "https://github.com/hianova/CovOpt-Analyzer"
+documentation = "https://docs.rs/covopt-schema"
+readme = "README.md"
+keywords = ["performance", "schema", "metadata", "optimization"]
+categories = ["development-tools", "data-structures"]
+authors = ["hianova <hianova@github.com>"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

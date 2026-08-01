@@ -7,11 +7,12 @@ use std::collections::BTreeSet;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::{Expr, ExprRange, ItemFn, LitStr, Token, parse_macro_input};
 
-/// Defines a performance tuning parameter that can be automatically optimized by CovOpt.
+/// Declares a parameter default and optional search metadata for CovOpt.
 ///
-/// This macro extracts hardcoded magic numbers into dynamically tunable parameters.
-/// During normal execution, it evaluates to the `$default` value.
-/// During `covopt optimize`, the CLI tool injects environment variables to tune it.
+/// During normal compilation, it evaluates to the `$default` value. Runtime
+/// search/robustness modes may inject a trial value; compile-time confirmation
+/// additionally requires a candidate hash. Ordinary builds never opt into a
+/// candidate merely because an environment variable happens to be present.
 ///
 /// # Example
 /// ```rust
@@ -813,7 +814,7 @@ pub fn covopt_hoist(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Marks a benchmark function and automatically prevents Dead Code Elimination (DCE).
 ///
 /// This macro wraps the function body in a closure and passes its result to `std::hint::black_box()`.
-/// It also serves as a static marker for `covopt audit` to quickly identify hot paths
+/// It also serves as a static marker for `covopt inspect` to identify hot paths.
 /// and skip analyzing irrelevant code.
 #[proc_macro_attribute]
 pub fn covopt_bench(attr: TokenStream, item: TokenStream) -> TokenStream {

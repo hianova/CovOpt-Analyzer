@@ -1,16 +1,24 @@
 [package]
 name = "covopt-macro"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2024"
-description = "Lightweight parameter tuning and complexity testing macros for CovOpt-Analyzer"
+description = "Source annotations and explicit parameter-search adapters for CovOpt"
 license = "MIT"
 repository = "https://github.com/hianova/CovOpt-Analyzer"
 homepage = "https://github.com/hianova/CovOpt-Analyzer"
+documentation = "https://docs.rs/covopt-macro"
 readme = "README.md"
 keywords = ["performance", "macro", "tuning", "optimization", "complexity"]
 categories = ["development-tools::profiling", "no-std"]
 authors = ["hianova <hianova@github.com>"]
-exclude = [".covopt/", ".covopt_backup/", "scratch/"]
+exclude = [
+    ".DS_Store",
+    ".agents/",
+    ".covopt/",
+    ".covopt.toml",
+    ".covopt_backup/",
+    "scratch/",
+]
 
 [lib]
 proc-macro = true
@@ -19,7 +27,7 @@ proc-macro = true
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-covopt-schema = { path = "../covopt-schema", version = "2.0.0" }
+covopt-schema = { path = "../covopt-schema", version = "3.0.0" }
 syn = { version = "3.0", features = ["full", "parsing", "visit"] }
 quote = "1.0"
 proc-macro2 = "1.0"

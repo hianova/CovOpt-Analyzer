@@ -1,78 +1,107 @@
-# CovOpt-Analyzer 🚀
+# CovOpt-Analyzer 3.0
 
-**CovOpt-Analyzer (Coverage-Optimized Complexity Analyzer & Auto-Tuner)** is an evidence-driven Rust analyzer. It discovers assurance obligations, plans the lowest-cost applicable evidence, checks complexity growth and safety risks, and verifies optimization or repair candidates before they can be applied.
+CovOpt is an evidence-driven Rust optimizer and assurance tool. Version 3 adds
+a goal-driven convergence loop: it discovers a target, compiles an open
+`GoalSpec`, generates repair candidates, verifies the exact patch in a sandbox,
+and can apply it through a recoverable transaction.
 
-LLVM source-based coverage supplies deterministic source-region execution counts. CovOpt fits their growth across configured inputs to classify asymptotic behavior; those counts are not CPU instructions, latency measurements, or a formal proof. LLVM-MCA, sanitizers, and runtime tools remain separate opt-in evidence providers.
+CovOpt keeps different claims separate. Source coverage measures executed
+regions; LLVM-MCA models target assembly; tests and sanitizers observe runtime
+behavior; atomic, temporal, relational, and adversarial checks are bounded
+evidence. None is silently promoted into a proof of something it cannot show.
 
----
+## Workspace crates
 
-## ✨ Key Features
-- **Source-preserving instrumentation**: Coverage instrumentation is confined to analysis builds.
-- **Complexity fitting**: Uses regression over source-region counts to detect Big-O regressions.
-- **Senior Engineer Advisor**: Detects hot-path heap allocations, Tokio async blocks, and lock contention.
-- **Planner-driven guarantees**: `covopt check` selects only the evidence providers required by policy.
-- **Goal-driven convergence**: `covopt converge` infers/loads an open GoalSpec, verifies exact patches, applies transactionally by default, and rolls back failed post-verification.
-- **Unified parameter search**: One seeded annealed Monte Carlo engine explores all numeric parameter classes; tags describe constraints rather than choosing algorithms.
-- **Explicit evidence strength**: Reports distinguish `Proven`, `Modeled`, `Observed`, `Assumed`, `Unknown`, and `Failed`; bounded/static checks are never silently promoted to proofs.
-- **Git Incremental Audit**: Native support for `--staged` and `--diff main`.
+| Crate | Purpose |
+| --- | --- |
+| `CovOpt-Analyzer` | `covopt` and `cargo-covopt` binaries plus the analysis library |
+| `covopt-macro` | Source annotations, parameter metadata, benchmark/test adapters |
+| `covopt-schema` | Shared Rust metadata types and wire-format version |
 
----
+The three crates use package version `3.0.0`. The independent metadata wire
+format remains `covopt_schema::SCHEMA_VERSION == 1` until its serialized shape
+becomes incompatible.
 
-## ⚡ Quick Start
+## Install
 
-### 1. Installation
 ```bash
-cargo install CovOpt-Analyzer
-rustup component add llvm-tools-preview
+cargo install CovOpt-Analyzer --version 3.0.0
 ```
 
-### 2. Declare a Target and Evidence
-Add to `Cargo.toml`:
+Add annotations when the project needs declared targets or parameter domains:
+
 ```toml
 [dev-dependencies]
-covopt-macro = "2.0.0"
+covopt-macro = "3.0.0"
 ```
 
-In your tests:
 ```rust
-use covopt_macro::{covopt_evidence, covopt_target, covopt_test};
+use covopt_macro::{covopt_evidence, covopt_param, covopt_target, covopt_test};
 
-#[covopt_target(id = "process_data", complexity = "O(N)")]
-pub fn process_data(n: usize) { /* ... */ }
+#[covopt_target(id = "process", complexity = "O(N)", criticality = "normal")]
+pub fn process(n: usize) -> usize {
+    let batch = covopt_param!(
+        "process.batch",
+        64usize,
+        range = 1..=4096,
+        class = "capacity",
+        scale = "pow2"
+    );
+    (0..n).step_by(batch).sum()
+}
 
-#[covopt_evidence(target = "process_data", n = [1000, 5000], seeds = "adaptive")]
-#[covopt_test(target_fn = "process_data", expected = "ON", n_values = "1000,5000")]
-fn test_process_complexity(n: usize) {
-    process_data(n);
+#[covopt_evidence(target = "process", n = [64, 1024], seeds = "7,11")]
+#[covopt_test(target_fn = "process", expected = "ON", n_values = "64,1024")]
+fn process_complexity(n: usize) {
+    std::hint::black_box(process(n));
 }
 ```
 
-### 3. Usage Cheat Sheet
+`covopt_param!` compiles to its declared default in normal builds. Candidate
+injection occurs only in explicit search/confirmation modes, so merely adding
+the macro does not make production compilation depend on CovOpt.
+
+## Primary workflow
+
 ```bash
-covopt converge                     # Default turbo loop; workspace-only transactional apply
-covopt init                         # Optional: persist a project policy template
-covopt check --mode adaptive        # Check guarantees via the planner
-covopt inspect --format json        # Explain findings and candidates
-covopt optimize codegen             # Generate optimization candidates
-covopt optimize parameters --target my_bench # Seeded parameter search
-covopt fix --plan                   # Plan a minimal repair set
-covopt verify coverage --target foo # Force a dynamic provider
+covopt converge                                  # Default: transactional workspace apply
+covopt converge --authority suggest --format json
+covopt check --mode adaptive                     # Evaluate configured guarantees
+covopt inspect --format json                     # Findings and candidates
+covopt optimize parameters --target my_bench     # Seeded search
+covopt verify temporal --target worker --operator eventually --event completed
 ```
 
-`covopt check` does not require initialization: when `.covopt.toml` is absent
-it uses the embedded V3 policy and annotation discovery. Run `covopt init` only
-when the project needs persistent policy overrides.
+`converge` defaults to `apply`, but its authority stops at the current
+workspace. It does not commit, push, publish, or call an external service. A
+candidate must pass candidate-bound evidence before a write; post-apply failure
+causes automatic rollback. The complete outcome is written to
+`target/covopt/decision-bundle.json`.
 
-Legacy commands (`ci`, `audit`, `advise`, `report`, `profile`, `harden`, and
-`fuzz`) remain hidden compatibility aliases for one major version and print a
-migration hint. Use `covopt init --migrate` to upgrade an older configuration.
+Initialization is optional. Without `.covopt.toml`, CovOpt uses embedded v3
+defaults and source annotation discovery. `covopt init` only persists policy;
+it does not edit `Cargo.toml`, `.gitignore`, or `.agents`.
 
----
+## Evidence and dependency policy
 
-## 📚 Documentation
-For deeper dives into the architecture and advanced agentic workflows:
-- [Architecture & Tech Stack](ARCHITECTURE.md)
-- [Advanced Usage & AI Piping](ADVANCED.md)
+- Static AST and compiler checks are the baseline.
+- Risk selects stronger evidence; it is not a permission switch.
+- LLVM-MCA is used for candidate-bound code-generation comparison when needed.
+- Coverage is explicit evidence, not a default optimization target.
+- Runtime profiling, sanitizers, and fuzzing remain optional providers.
+- Unknown evaluators, missing contracts, unavailable tools, and non-materialized
+  candidates remain `unresolved`; they never pass by fallback.
 
-## 📜 License
-MIT License - see [LICENSE](LICENSE) for details.
+## Documentation
+
+- [GoalSpec reference](docs/GOALSPEC.md)
+- [DecisionBundle and rollback](docs/DECISION_BUNDLE.md)
+- [Architecture](ARCHITECTURE.md)
+- [Advanced workflows](ADVANCED.md)
+- [Migration from 2.x](MIGRATION.md)
+- [Release and crates.io procedure](RELEASING.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+MIT — see [LICENSE](LICENSE).

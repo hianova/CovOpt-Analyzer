@@ -1,16 +1,25 @@
 [package]
 name = "CovOpt-Analyzer"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2024"
-description = "A Coverage-Optimized Complexity Analyzer and Auto-Tuning engine for Rust."
+description = "Evidence-driven Rust analysis, optimization, and transactional convergence"
 license = "MIT"
 repository = "https://github.com/hianova/CovOpt-Analyzer"
 homepage = "https://github.com/hianova/CovOpt-Analyzer"
+documentation = "https://docs.rs/CovOpt-Analyzer"
 readme = "README.md"
-keywords = ["performance", "cli", "profiling", "optimization", "complexity"]
-categories = ["command-line-utilities", "development-tools::profiling"]
+keywords = ["performance", "cli", "static-analysis", "optimization", "testing"]
+categories = ["command-line-utilities", "development-tools::testing"]
 authors = ["hianova <hianova@github.com>"]
-exclude = [".covopt/", ".covopt_backup/", "scratch/"]
+exclude = [
+    ".DS_Store",
+    ".agents/",
+    ".covopt/",
+    ".covopt.toml",
+    ".covopt_backup/",
+    ".gitignore",
+    "scratch/",
+]
 
 [[bin]]
 name = "covopt"
@@ -21,8 +30,8 @@ name = "cargo-covopt"
 path = "src/bin/cargo_covopt.rs"
 
 [dependencies]
-covopt-macro = { version = "2.0.0", path = "../covopt-macro" }
-covopt-schema = { version = "2.0.0", path = "../covopt-schema" }
+covopt-macro = { version = "3.0.0", path = "../covopt-macro" }
+covopt-schema = { version = "3.0.0", path = "../covopt-schema" }
 clap = { version = "4.5.31", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
