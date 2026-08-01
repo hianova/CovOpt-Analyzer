@@ -9,6 +9,7 @@ pub mod atomic_synth;
 pub mod cache;
 pub mod codegen_optimizer;
 pub mod config;
+pub mod converge;
 pub mod coverage;
 pub mod dataflow;
 pub mod dummy_heuristics;

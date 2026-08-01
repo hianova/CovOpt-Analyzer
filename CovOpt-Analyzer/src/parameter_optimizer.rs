@@ -6,6 +6,7 @@
 use crate::search::{AnnealingConfig, SearchRng, annealed_monte_carlo};
 use covopt_macro::covopt_param;
 use covopt_schema::{EvaluationMode, ParameterDomain, ParameterValue};
+use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::process::Command;
 
@@ -40,12 +41,22 @@ pub struct PhasedOptimizationResult {
     pub search_score: f64,
     pub confirmation_score: Option<f64>,
     pub robustness_scores: Vec<f64>,
+    pub robustness_observations: Vec<RobustnessObservation>,
+    pub robustness_score_floor: Option<f64>,
     pub confirmed: bool,
     pub robustness_verified: bool,
     pub search_elapsed_ms: u128,
     pub confirmation_elapsed_ms: Option<u128>,
     pub evaluated_candidates: usize,
     pub accepted_transitions: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RobustnessObservation {
+    pub label: String,
+    pub parameters: HashMap<String, f64>,
+    pub score: Option<f64>,
+    pub passed: bool,
 }
 
 impl ParameterOptimizer {
@@ -212,22 +223,42 @@ impl ParameterOptimizer {
         let confirmation_elapsed_ms =
             confirmation_score.map(|_| confirmation_started.elapsed().as_millis());
         let confirmed = confirmation_score.is_some();
-        let robustness_scores = if confirmed {
-            [self.seed.wrapping_add(1), self.seed.wrapping_add(2)]
+        // Robustness is an executable boundary check, not a second search
+        // strategy. The winner is replayed under new seeds and at every
+        // declared parameter-domain edge. The admissible score floor is
+        // derived from the observed Search/Confirm spread, so no arbitrary
+        // degradation percentage is hidden here.
+        let robustness_score_floor = confirmation_score
+            .map(|confirmed_score| confirmed_score - (confirmed_score - search_score).abs());
+        let robustness_observations = if confirmed {
+            robustness_candidates(&best_params, &names, &self.params, self.seed)
                 .into_iter()
-                .filter_map(|seed| {
-                    let mut seeded = best_params.clone();
-                    seeded.insert("COVOPT_SEED".to_string(), seed as f64);
-                    self.evaluate_mode(&seeded, "search")
+                .map(|(label, parameters)| {
+                    let score = self.evaluate_mode(&parameters, "robustness");
+                    let passed = score.is_some_and(|score| {
+                        score.is_finite()
+                            && robustness_score_floor.is_some_and(|floor| score >= floor)
+                    });
+                    RobustnessObservation {
+                        label,
+                        parameters,
+                        score,
+                        passed,
+                    }
                 })
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
-        const ROBUSTNESS_SAMPLE_COUNT: usize = 2;
+        let robustness_scores = robustness_observations
+            .iter()
+            .filter_map(|observation| observation.score)
+            .collect::<Vec<_>>();
         let robustness_verified = confirmed
-            && robustness_scores.len() == ROBUSTNESS_SAMPLE_COUNT
-            && robustness_scores.iter().all(|score| score.is_finite());
+            && !robustness_observations.is_empty()
+            && robustness_observations
+                .iter()
+                .all(|observation| observation.passed);
 
         PhasedOptimizationResult {
             phase: if robustness_verified {
@@ -240,6 +271,8 @@ impl ParameterOptimizer {
             search_score,
             confirmation_score,
             robustness_scores,
+            robustness_observations,
+            robustness_score_floor,
             confirmed,
             robustness_verified,
             search_elapsed_ms,
@@ -251,13 +284,19 @@ impl ParameterOptimizer {
 
     fn evaluate_mode(&self, params: &HashMap<String, f64>, mode: &str) -> Option<f64> {
         let compile_time_search = mode == "search" && !self.compile_time_parameters.is_empty();
-        let effective_mode = if compile_time_search { "confirm" } else { mode };
+        let effective_mode = if mode == "robustness" {
+            "robustness"
+        } else if compile_time_search {
+            "confirm"
+        } else {
+            mode
+        };
         let mut command = Command::new("cargo");
         command
             .args(["bench", "--bench", &self.target_test])
             .env("COVOPT_PARAM_MODE", effective_mode);
 
-        if effective_mode == "confirm" {
+        if matches!(effective_mode, "confirm" | "robustness") {
             let hash = candidate_hash(params, self.seed);
             command
                 .env("COVOPT_CONFIRM_CANDIDATE_HASH", &hash)
@@ -266,7 +305,10 @@ impl ParameterOptimizer {
 
         for (name, value) in params {
             command.env(format!("COVOPT_PARAM_{name}"), value.to_string());
-            if effective_mode == "confirm"
+            if name == "COVOPT_SEED" {
+                command.env("COVOPT_FUZZ_SEED", value.to_string());
+            }
+            if matches!(effective_mode, "confirm" | "robustness")
                 && (mode == "confirm" || self.compile_time_parameters.contains(name))
             {
                 command.env(
@@ -288,6 +330,37 @@ impl ParameterOptimizer {
                     .filter(|score| score.is_finite())
             })
     }
+}
+
+fn robustness_candidates(
+    best: &HashMap<String, f64>,
+    names: &[String],
+    ranges: &HashMap<String, ParamRange>,
+    seed: u64,
+) -> Vec<(String, HashMap<String, f64>)> {
+    let mut candidates = [seed.wrapping_add(1), seed.wrapping_add(2)]
+        .into_iter()
+        .map(|sample_seed| {
+            let mut parameters = best.clone();
+            parameters.insert("COVOPT_SEED".to_string(), sample_seed as f64);
+            (format!("seed:{sample_seed}"), parameters)
+        })
+        .collect::<Vec<_>>();
+    for name in names {
+        let Some(range) = ranges.get(name) else {
+            continue;
+        };
+        for (edge, value) in [("min", range.min), ("max", range.max)] {
+            if best.get(name).is_some_and(|best| *best == value) {
+                continue;
+            }
+            let mut parameters = best.clone();
+            parameters.insert(name.clone(), value);
+            parameters.insert("COVOPT_SEED".to_string(), seed as f64);
+            candidates.push((format!("{name}:{edge}"), parameters));
+        }
+    }
+    candidates
 }
 
 fn initial_state(names: &[String], ranges: &HashMap<String, ParamRange>) -> HashMap<String, f64> {
@@ -371,6 +444,8 @@ fn empty_result(search_elapsed_ms: u128) -> PhasedOptimizationResult {
         search_score: f64::NEG_INFINITY,
         confirmation_score: None,
         robustness_scores: Vec::new(),
+        robustness_observations: Vec::new(),
+        robustness_score_floor: None,
         confirmed: false,
         robustness_verified: false,
         search_elapsed_ms,
@@ -408,6 +483,8 @@ fn persist_tuned_environment(
             "candidate_hash": result.candidate_hash,
             "confirmation_score": result.confirmation_score,
             "robustness_scores": result.robustness_scores,
+            "robustness_observations": result.robustness_observations,
+            "robustness_score_floor": result.robustness_score_floor,
             "evaluated_candidates": result.evaluated_candidates,
             "accepted_transitions": result.accepted_transitions,
             "observed": true,
@@ -415,6 +492,33 @@ fn persist_tuned_environment(
         .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod robustness_tests {
+    use super::*;
+
+    #[test]
+    fn robustness_candidates_cover_seeds_and_declared_domain_edges() {
+        let best = HashMap::from([("capacity".to_string(), 8.0)]);
+        let ranges = HashMap::from([(
+            "capacity".to_string(),
+            ParamRange {
+                min: 1.0,
+                max: 64.0,
+                is_int: true,
+            },
+        )]);
+        let candidates = robustness_candidates(&best, &["capacity".to_string()], &ranges, 7);
+        let labels = candidates
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["seed:8", "seed:9", "capacity:min", "capacity:max"]
+        );
+    }
 }
 
 fn candidate_hash(params: &HashMap<String, f64>, seed: u64) -> String {

@@ -403,7 +403,7 @@ pub fn run_scan(path: Option<String>, auto_fix: bool, restore: bool) -> Result<(
     let mut source_hashes = BTreeMap::new();
     let mut rollback_entries = Vec::new();
 
-    let config = crate::config::CovOptConfig::load(".covopt.toml").ok();
+    let config = crate::config::CovOptConfig::load_or_embedded(".covopt.toml").ok();
     let macro_path = config
         .and_then(|c| c.macro_path)
         .unwrap_or_else(|| "covopt_macro::covopt_param".to_string());

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 pub struct AsmExtractor {
     target_dir: PathBuf,
@@ -20,6 +21,26 @@ impl AsmExtractor {
 
     /// Triggers compilation to generate assembly for a specific package or workspace
     pub fn compile_asm_for_package(&self, pkg: Option<&str>) -> Result<(), String> {
+        self.compile_asm_for_package_with_env(pkg, &[])
+    }
+
+    /// Compile assembly under an explicit candidate configuration. Cargo
+    /// profile environment variables and RUSTFLAGS participate in Cargo's
+    /// fingerprint, so candidate metrics describe the requested settings.
+    pub fn compile_asm_for_package_with_env(
+        &self,
+        pkg: Option<&str>,
+        environment: &[(String, String)],
+    ) -> Result<(), String> {
+        self.compile_asm_for_package_with_env_timeout(pkg, environment, None)
+    }
+
+    pub fn compile_asm_for_package_with_env_timeout(
+        &self,
+        pkg: Option<&str>,
+        environment: &[(String, String)],
+        timeout: Option<Duration>,
+    ) -> Result<(), String> {
         let mut cmd = Command::new("cargo");
         cmd.arg("rustc").arg("--release");
         if let Some(p) = pkg {
@@ -37,10 +58,21 @@ impl AsmExtractor {
         }
         cmd.args(["--", "--emit=asm"]);
         cmd.current_dir(&self.target_dir);
+        cmd.envs(environment.iter().map(|(name, value)| (name, value)));
 
-        let status = cmd
-            .status()
-            .map_err(|e| format!("Failed to run cargo rustc: {}", e))?;
+        let status = match timeout {
+            Some(timeout) => {
+                crate::runner::command_output_with_timeout(
+                    &mut cmd,
+                    "candidate assembly compilation",
+                    timeout,
+                )?
+                .status
+            }
+            None => cmd
+                .status()
+                .map_err(|e| format!("Failed to run cargo rustc: {}", e))?,
+        };
 
         if !status.success() {
             return Err("cargo rustc --emit=asm failed".to_string());
@@ -62,7 +94,11 @@ impl AsmExtractor {
         {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("s") {
-                all_s_files.push(path);
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok();
+                all_s_files.push((modified, path));
             }
         }
 
@@ -73,7 +109,8 @@ impl AsmExtractor {
         // We look for a label that contains our demangled function name
         // Assembly labels usually look like:
         // _ZN15CovOpt-Analyzer...:
-        for s_file in all_s_files {
+        all_s_files.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+        for (_, s_file) in all_s_files {
             if let Ok(content) = fs::read_to_string(&s_file) {
                 let mut in_target_func = false;
                 let mut block = String::new();

@@ -515,6 +515,16 @@ impl<'ast> Visit<'ast> for ParameterVisitor {
         visit::visit_expr_macro(self, node);
     }
 
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if node.mac.path.segments.last().is_some_and(|segment| {
+            matches!(segment.ident.to_string().as_str(), "qsbr" | "qsbr_domain")
+        }) && let Ok(args) = syn::parse2::<QsbrDomainArgs>(node.mac.tokens.clone())
+        {
+            self.insert_qsbr_capacity_parameters(&args.name, node.mac.path.span());
+        }
+        visit::visit_item_macro(self, node);
+    }
+
     fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
         let ids = parameter_ids_in_expr(node);
         if ids.len() > 1 {
@@ -537,6 +547,120 @@ impl<'ast> Visit<'ast> for ParameterVisitor {
             self.groups.push(ids);
         }
         visit::visit_expr_for_loop(self, node);
+    }
+}
+
+impl ParameterVisitor {
+    fn insert_qsbr_capacity_parameters(&mut self, domain: &syn::Ident, span: proc_macro2::Span) {
+        let source = SourceAnchor {
+            file: self.file.clone(),
+            line: span.start().line,
+            column: span.start().column,
+        };
+        let group = [
+            (
+                "participant_capacity",
+                64,
+                4_096,
+                "participants",
+                &["memory", "availability"][..],
+            ),
+            (
+                "retire_capacity",
+                256,
+                65_536,
+                "records_per_participant",
+                &["memory", "backpressure"][..],
+            ),
+            (
+                "reclaim_batch_capacity",
+                128,
+                4_096,
+                "records_per_callback",
+                &["stack", "throughput"][..],
+            ),
+        ]
+        .into_iter()
+        .map(|(suffix, default, maximum, unit, risks)| {
+            // `module_path!()` is resolved only after macro expansion. The
+            // analyzer keeps the stable source-visible suffix; reports can
+            // match the concrete runtime ID by this exact domain suffix.
+            let id = ParameterId::new(format!("{}::{suffix}", domain));
+            let tags = std::iter::once(ParameterTag::Capacity)
+                .chain(
+                    risks
+                        .iter()
+                        .map(|risk| ParameterTag::Custom((*risk).to_string())),
+                )
+                .chain([
+                    ParameterTag::Custom("pow2".to_string()),
+                    ParameterTag::Custom("qsbr-static-capacity".to_string()),
+                ])
+                .collect();
+            let descriptor = ParameterDescriptor {
+                schema_version: covopt_schema::SCHEMA_VERSION,
+                id: id.clone(),
+                default: ParameterValue::Count(default),
+                domain: ParameterDomain::Range(ParameterRange {
+                    min: ParameterValue::Count(1),
+                    max: ParameterValue::Count(maximum),
+                    inclusive_max: true,
+                }),
+                class: ParameterClass::Capacity,
+                evaluation: EvaluationMode::CompileTime,
+                tags,
+                source: source.clone(),
+                unit: Some(unit.to_string()),
+                inferred: false,
+                confidence: Some(1.0),
+                inference_source: Some(
+                    "no_std_tool qsbr!/qsbr_domain! expansion contract".to_string(),
+                ),
+            };
+            let record = ParameterRecord {
+                descriptor,
+                phase: ParameterPhase::Discovered,
+                properties: vec![ParameterProperty::Constrained {
+                    reason: "compile-time power-of-two static capacity".to_string(),
+                }],
+                disposition: ParameterDisposition::KeepTunable,
+                coupling_group: None,
+            };
+            (id, record)
+        })
+        .collect::<Vec<_>>();
+
+        let mut members = BTreeSet::new();
+        for (id, record) in group {
+            members.insert(id.clone());
+            match self.parameters.entry(id) {
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    self.duplicate_ids.insert(entry.key().clone());
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(record);
+                }
+            }
+        }
+        self.groups.push(members);
+    }
+}
+
+struct QsbrDomainArgs {
+    _visibility: syn::Visibility,
+    _mod_token: syn::Token![mod],
+    name: syn::Ident,
+    _semi: syn::Token![;],
+}
+
+impl Parse for QsbrDomainArgs {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            _visibility: input.parse()?,
+            _mod_token: input.parse()?,
+            name: input.parse()?,
+            _semi: input.parse()?,
+        })
     }
 }
 
@@ -866,6 +990,31 @@ mod tests {
         assert_eq!(structured.default, ParameterValue::Bytes(8));
         assert!(matches!(structured.domain, ParameterDomain::Range(_)));
         assert!(graph.parameters.contains_key(&ParameterId::new("legacy")));
+    }
+
+    #[test]
+    fn discovers_no_std_tool_qsbr_static_capacities() {
+        let graph = ParameterDependencyGraph::from_source(
+            r#"
+                no_std_tool::qsbr! { pub mod cache_domain; }
+                no_std_tool::qsbr_domain! { mod io_domain; }
+            "#,
+            "src/lib.rs",
+        )
+        .unwrap();
+
+        assert_eq!(graph.parameters.len(), 6);
+        let participant =
+            &graph.parameters[&ParameterId::new("cache_domain::participant_capacity")].descriptor;
+        assert_eq!(participant.default, ParameterValue::Count(64));
+        assert_eq!(participant.evaluation, EvaluationMode::CompileTime);
+        assert!(matches!(participant.domain, ParameterDomain::Range(_)));
+        assert!(
+            participant
+                .tags
+                .contains(&ParameterTag::Custom("qsbr-static-capacity".to_string()))
+        );
+        assert_eq!(graph.coupling_groups.len(), 2);
     }
 
     #[test]

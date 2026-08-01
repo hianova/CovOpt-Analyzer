@@ -40,7 +40,20 @@ pub fn command_output_with_ci_deadline(
     if timeout.is_zero() {
         return Err(format!("CI budget exhausted before {operation}"));
     }
+    command_output_with_timeout(command, operation, timeout)
+}
 
+/// Capture a child process with a hard wall-clock timeout and process-group
+/// termination on Unix. This is shared by runtime evidence providers so a
+/// stalled target cannot consume the rest of an optimization budget.
+pub fn command_output_with_timeout(
+    command: &mut Command,
+    operation: &str,
+    timeout: Duration,
+) -> Result<Output, String> {
+    if timeout.is_zero() {
+        return Err(format!("zero timeout before {operation}"));
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -105,7 +118,7 @@ pub fn command_output_with_ci_deadline(
         .map_err(|_| format!("stderr reader panicked for {operation}"))?;
     if timed_out {
         return Err(format!(
-            "CI budget exhausted while running {operation}: {}",
+            "timed out while running {operation}: {}",
             String::from_utf8_lossy(&stderr).trim()
         ));
     }

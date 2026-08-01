@@ -8,8 +8,10 @@ use crate::assurance::{Counterexample, ObligationStatus};
 use crate::atomic_model::RustOrdering;
 use crate::model::{SampleKey, ScopeId, TraceId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
@@ -105,6 +107,112 @@ impl Trace {
     pub fn operation_names(&self) -> impl Iterator<Item = &str> {
         self.events.iter().map(|event| event.operation.as_str())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeTraceCapture {
+    pub trace: Trace,
+    pub command: Vec<String>,
+    pub environment: BTreeMap<String, String>,
+    pub elapsed_ms: u64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn read_trace(path: impl AsRef<Path>) -> Result<Trace, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let trace: Trace = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if trace.schema_version != crate::model::MODEL_SCHEMA_VERSION {
+        return Err(format!(
+            "trace schema {} does not match model schema {}",
+            trace.schema_version,
+            crate::model::MODEL_SCHEMA_VERSION
+        ));
+    }
+    Ok(trace)
+}
+
+/// Runtime harness hook. A target test can call this without knowing where
+/// CovOpt stores artifacts; when no capture was requested it is a no-op.
+pub fn write_trace_to_requested_path(trace: &Trace) -> Result<bool, String> {
+    let Some(path) = std::env::var_os("COVOPT_TRACE_FILE") else {
+        return Ok(false);
+    };
+    let bytes = trace.deterministic_bytes()?;
+    fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+/// Execute a real Cargo test with a trace output contract and load the emitted
+/// runtime Trace IR. Absence of a trace is an error, not a static observation.
+pub fn capture_cargo_trace(
+    workspace: &Path,
+    manifest_path: &Path,
+    target: &str,
+    sample: SampleKey,
+    timeout: Duration,
+) -> Result<RuntimeTraceCapture, String> {
+    let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let trace_path = temp.path().join("trace.json");
+    let mut environment = BTreeMap::from([(
+        "COVOPT_TRACE_FILE".to_string(),
+        trace_path.display().to_string(),
+    )]);
+    if let Some(n) = sample.n {
+        environment.insert("COVOPT_N".to_string(), n.to_string());
+    }
+    if let Some(seed) = sample.seed {
+        environment.insert("COVOPT_FUZZ_SEED".to_string(), seed.to_string());
+    }
+    if let Some(threads) = sample.threads {
+        environment.insert("COVOPT_THREADS".to_string(), threads.to_string());
+    }
+    if let Some(capacity) = sample.queue_capacity {
+        environment.insert("COVOPT_QUEUE_CAPACITY".to_string(), capacity.to_string());
+    }
+    let rendered = vec![
+        "cargo".to_string(),
+        "test".to_string(),
+        target.to_string(),
+        "--manifest-path".to_string(),
+        manifest_path.display().to_string(),
+        "--".to_string(),
+        "--nocapture".to_string(),
+    ];
+    let mut command = Command::new("cargo");
+    command
+        .arg("test")
+        .arg(target)
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .args(["--", "--nocapture"])
+        .current_dir(workspace)
+        .envs(&environment);
+    let started = Instant::now();
+    let output =
+        crate::runner::command_output_with_timeout(&mut command, "runtime trace target", timeout)?;
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    if !output.status.success() {
+        return Err(format!(
+            "runtime trace target failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut trace = read_trace(&trace_path).map_err(|error| {
+        format!(
+            "target completed but did not emit valid Trace IR to {}: {error}",
+            trace_path.display()
+        )
+    })?;
+    trace.sample = sample;
+    Ok(RuntimeTraceCapture {
+        trace,
+        command: rendered,
+        environment,
+        elapsed_ms,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,7 +334,11 @@ pub fn check_temporal(
         });
     }
     Ok(TemporalCheckResult {
-        status: ObligationStatus::Modeled,
+        status: if trace.static_graph.is_some() {
+            ObligationStatus::Modeled
+        } else {
+            ObligationStatus::Observed
+        },
         explored_events: events.len(),
         bound: contract.bound,
         counterexample: None,

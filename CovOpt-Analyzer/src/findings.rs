@@ -5,6 +5,7 @@ pub use crate::model::ObligationId;
 use crate::repair::RepairCandidateId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::Path;
 
 pub type FindingEvidence = Evidence;
 
@@ -218,4 +219,120 @@ impl FindingReport {
     pub fn format_lines(&self) -> Vec<String> {
         self.findings.iter().map(FindingFormatter::short).collect()
     }
+}
+
+/// Run the shared source analysis used by inspection, repair planning, and the
+/// autonomous convergence loop. Candidate generation lives here so every
+/// caller sees the same findings, stable IDs, and source-bound materializers.
+pub fn analyze_source(
+    file: &Path,
+    function_filter: Option<&str>,
+    codegen_config: &crate::codegen_optimizer::CodegenConfig,
+    layout_config: &crate::layout_optimizer::LayoutConfig,
+) -> Result<FindingReport, String> {
+    let source = std::fs::read_to_string(file).map_err(|error| error.to_string())?;
+    let ast = syn::parse_file(&source).map_err(|error| error.to_string())?;
+    let mut report = FindingReport::default();
+    report.findings.extend(crate::dataflow::analyze_file(file));
+
+    for item in ast.items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                if function_filter.is_some_and(|wanted| wanted != name) {
+                    continue;
+                }
+                let mut findings =
+                    crate::advisor::EncapsulationAdvisor::analyze(&item_fn, None).findings;
+                for finding in &mut findings {
+                    normalize_finding(finding, file, Some(&name));
+                }
+                report.findings.extend(findings);
+            }
+            syn::Item::Struct(item_struct) => {
+                let name = item_struct.ident.to_string();
+                let mut findings =
+                    crate::advisor::EncapsulationAdvisor::analyze_struct(&item_struct).findings;
+                for finding in &mut findings {
+                    normalize_finding(finding, file, Some(&name));
+                }
+                report.findings.extend(findings);
+            }
+            _ => {}
+        }
+    }
+
+    for model in crate::layout_optimizer::extract_layout(&source, None).unwrap_or_default() {
+        report
+            .findings
+            .extend(crate::layout_optimizer::layout_findings(
+                &model,
+                file.display().to_string(),
+            ));
+    }
+    report
+        .findings
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    report.findings.dedup_by(|left, right| left.id == right.id);
+
+    let codegen = crate::codegen_optimizer::generate_candidates(
+        &source,
+        file,
+        &report.findings,
+        codegen_config,
+    )
+    .unwrap_or_default();
+    report
+        .repair_candidates
+        .extend(codegen.into_iter().map(|candidate| candidate.repair));
+
+    for model in crate::layout_optimizer::extract_layout(&source, None).unwrap_or_default() {
+        let findings = crate::layout_optimizer::layout_findings(&model, file.display().to_string());
+        for mut candidate in
+            crate::layout_optimizer::generate_candidates(&model, &findings, layout_config)
+        {
+            match crate::layout_optimizer::materialize_candidate(
+                &source,
+                file,
+                &candidate,
+                layout_config.cache_line_bytes,
+            )? {
+                Some(edit) => candidate.repair.changes.push(edit),
+                None => candidate.repair.suggestion_only = true,
+            }
+            report.repair_candidates.push(candidate.repair);
+        }
+    }
+
+    for candidate in &report.repair_candidates {
+        for finding in &mut report.findings {
+            if candidate.resolves.contains(&finding.id)
+                && !finding.repair_candidates.contains(&candidate.id)
+            {
+                finding.repair_candidates.push(candidate.id.clone());
+            }
+        }
+    }
+    report
+        .repair_candidates
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    report
+        .repair_candidates
+        .dedup_by(|left, right| left.id == right.id);
+    Ok(report)
+}
+
+fn normalize_finding(finding: &mut Finding, file: &Path, function: Option<&str>) {
+    finding.location.file = file.display().to_string();
+    finding.function = function.map(str::to_string);
+    finding.id = stable_finding_id(
+        finding.kind,
+        &finding.location.file,
+        finding.location.line,
+        finding.function.as_deref(),
+    );
+    finding.explanation = FindingFormatter::explanation(
+        finding.kind,
+        finding.function.as_deref().unwrap_or("unknown function"),
+    );
 }

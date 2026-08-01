@@ -42,6 +42,66 @@ fn parse_plan_budget(value: &str) -> Result<u64, String> {
         .map_err(|error| format!("invalid planning budget '{}': {}", value, error))
 }
 
+pub fn run_converge(args: &CovOpt_Analyzer::config::ConvergeArgs) -> bool {
+    let authority = match args.authority.as_deref().map(str::parse).transpose() {
+        Ok(authority) => authority,
+        Err(error) => {
+            eprintln!("CovOpt converge: {error}");
+            return false;
+        }
+    };
+    let budget_ms = match args.budget.as_deref().map(parse_plan_budget).transpose() {
+        Ok(Some(0)) => {
+            eprintln!("CovOpt converge: budget must be greater than zero");
+            return false;
+        }
+        Ok(budget) => budget,
+        Err(error) => {
+            eprintln!("CovOpt converge: {error}");
+            return false;
+        }
+    };
+    let request = CovOpt_Analyzer::converge::ConvergeRequest {
+        spec_path: args.spec.as_ref().map(PathBuf::from),
+        target: args.target.clone(),
+        objectives: args.objective.clone(),
+        constraints: args.constraint.clone(),
+        budget_ms,
+        authority,
+    };
+    let bundle = match CovOpt_Analyzer::converge::converge(&request) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!("CovOpt converge: {error}");
+            return false;
+        }
+    };
+    let artifact = Path::new(CovOpt_Analyzer::converge::DECISION_BUNDLE_PATH);
+    if let Err(error) = CovOpt_Analyzer::converge::write_decision_bundle(&bundle, artifact) {
+        eprintln!("CovOpt converge: could not persist DecisionBundle: {error}");
+        return false;
+    }
+    if args.format == "json" {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&bundle).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "Converge {:?}: selected {}, remaining {}, unresolved {}",
+            bundle.status,
+            bundle.selected.len(),
+            bundle.final_analysis.findings.len(),
+            bundle.unresolved.len()
+        );
+        println!("DecisionBundle: {}", artifact.display());
+        for unresolved in &bundle.unresolved {
+            println!("  unresolved {}: {}", unresolved.id, unresolved.reason);
+        }
+    }
+    bundle.status.successful()
+}
+
 #[derive(Debug, Clone)]
 struct PreparedTargetPlan {
     policy: PlannerPolicy,
@@ -52,8 +112,24 @@ struct PreparedTargetPlan {
 fn check_executes_provider(provider: &str) -> bool {
     matches!(
         provider,
-        "Compiler" | "Mca" | "Coverage" | "Test" | "AtomicModel"
+        "Compiler"
+            | "Mca"
+            | "Coverage"
+            | "Test"
+            | "AtomicModel"
+            | "Temporal"
+            | "Relational"
+            | "Adversarial"
     )
+}
+
+fn target_executes_provider(target: &TargetConfig, provider: &str) -> bool {
+    check_executes_provider(provider)
+        && match provider {
+            "Temporal" => !target.temporal.is_empty(),
+            "Relational" => !target.relational.is_empty(),
+            _ => true,
+        }
 }
 
 fn prepare_target_plan(
@@ -129,7 +205,7 @@ fn prepare_target_plan(
         if matches!(mode, ProviderMode::Disabled) {
             continue;
         }
-        if !check_executes_provider(&action.provider.0) {
+        if !target_executes_provider(target, &action.provider.0) {
             action.available = false;
             action.description.push_str("; no automatic check executor");
         }
@@ -1527,31 +1603,77 @@ pub fn run_analysis(
     .passed
 }
 
-pub fn install_hook() {
+pub fn install_hook(path: Option<&str>) {
+    if let Some(path) = path
+        && let Err(error) = std::env::set_current_dir(path)
+    {
+        eprintln!("CovOpt init --hook: {error}");
+        std::process::exit(1);
+    }
     let hook_path = PathBuf::from(".git/hooks/pre-commit");
-    let hook_content = r#"#!/bin/sh
-echo "Running CovOpt-Analyzer on local commit..."
-if [ -f .covopt.toml ]; then
-    covopt audit
-    if [ $? -ne 0 ]; then
-        echo "CovOpt-Analyzer: Commit rejected due to complexity degradation or low coverage."
-        exit 1
-    fi
-else
-    echo "CovOpt-Analyzer: .covopt.toml not found, skipping audit."
+    let marker_start = "# >>> covopt pre-commit >>>";
+    let marker_end = "# <<< covopt pre-commit <<<";
+    let covopt_block = format!(
+        r#"{marker_start}
+echo "Running CovOpt check on staged changes..."
+if ! covopt check --staged --fast; then
+    echo "CovOpt: commit rejected because staged evidence checks failed."
+    exit 1
 fi
-"#;
-    if let Err(e) = fs::write(&hook_path, hook_content) {
-        eprintln!("Failed to write hook to {}: {}", hook_path.display(), e);
+{marker_end}
+"#
+    );
+    let existing = match fs::read_to_string(&hook_path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "#!/bin/sh\n".to_string(),
+        Err(error) => {
+            eprintln!("Failed to read {}: {error}", hook_path.display());
+            std::process::exit(1);
+        }
+    };
+    let without_old_block = if let Some(start) = existing.find(marker_start) {
+        let Some(relative_end) = existing[start..].find(marker_end) else {
+            eprintln!(
+                "CovOpt init --hook: malformed managed block in {}",
+                hook_path.display()
+            );
+            std::process::exit(1);
+        };
+        let end = start + relative_end + marker_end.len();
+        format!("{}{}", &existing[..start], &existing[end..])
+    } else {
+        existing
+    };
+    let hook_content = if let Some(newline) = without_old_block.find('\n') {
+        format!(
+            "{}\n{}{}",
+            &without_old_block[..newline],
+            covopt_block,
+            &without_old_block[newline + 1..]
+        )
+    } else {
+        format!("#!/bin/sh\n{covopt_block}{without_old_block}")
+    };
+    if let Err(error) = fs::write(&hook_path, hook_content) {
+        eprintln!("Failed to write hook to {}: {error}", hook_path.display());
         std::process::exit(1);
     }
     // Set executable bit
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&hook_path).unwrap().permissions();
+        let mut perms = match fs::metadata(&hook_path) {
+            Ok(metadata) => metadata.permissions(),
+            Err(error) => {
+                eprintln!("Failed to inspect {}: {error}", hook_path.display());
+                std::process::exit(1);
+            }
+        };
         perms.set_mode(covopt_param!("M_735_23", 0o755));
-        fs::set_permissions(&hook_path, perms).unwrap();
+        if let Err(error) = fs::set_permissions(&hook_path, perms) {
+            eprintln!("Failed to mark {} executable: {error}", hook_path.display());
+            std::process::exit(1);
+        }
     }
     println!(
         "Successfully installed pre-commit hook to {}",
@@ -1559,198 +1681,28 @@ fi
     );
 }
 
-const COVOPT_AGENT_RULES: &str = r#"# CovOpt Optimization & Tuning Rules (Google Antigravity)
-
-**Usage**: AI Agent instructions for performance verification and parameter tuning.
-
-## Core Rules to Prevent Audit Failures
-1. **Zero-Entropy Tuning**: NEVER use hardcoded magical numbers. ALWAYS use `covopt_param!` macro. 
-2. **Anti-DCE**: ALWAYS wrap loop variables with `std::hint::black_box()` in benchmarks to prevent O(N) -> O(1) DCE.
-3. **Lock-Free Critical Paths**: NEVER use standard library `Mutex` or `RwLock` on the critical path.
-4. **Strict Clippy Cleanliness**: DO NOT use `#[allow(...)]` to ignore type warnings for macro-generated code.
-
-## Available Commands
-- `covopt init`: Initialize or migrate the V3 policy configuration.
-- `covopt check`: Ask the Evidence Planner whether guarantees are satisfied.
-- `covopt inspect`: Explain findings and repair candidates without editing source.
-- `covopt optimize`: Generate input, atomic, codegen, or layout candidates.
-- `covopt fix`: Plan or apply sandbox-verified repairs.
-- `covopt verify`: Force a specific dynamic evidence provider.
-"#;
-
 pub fn init_config(args: crate::InitArgs) {
-    if let Some(p) = args.path
-        && let Err(e) = std::env::set_current_dir(&p)
+    if let Some(path) = args.path.as_deref()
+        && let Err(e) = std::env::set_current_dir(path)
     {
-        eprintln!("Failed to change directory to {}: {}", p, e);
+        eprintln!("Failed to change directory to {}: {}", path, e);
         std::process::exit(1);
     }
     let config_path = std::path::PathBuf::from(".covopt.toml");
     let has_config = config_path.exists();
     if has_config {
-        println!(
-            "CovOpt-Analyzer: .covopt.toml already exists. Skipping config creation, but will ensure rules are injected."
-        );
+        println!("CovOpt-Analyzer: .covopt.toml already exists; leaving it unchanged.");
     } else {
-        let mut default_config = String::from(
-            r#"version = 3
-
-[assurance]
-mode = "adaptive"
-overall_coverage = 0.90
-critical_coverage = 1.0
-performance_coverage = 0.90
-budget_seconds = 30
-planner = "hybrid"
-fail_on_critical_unknown = true
-
-[providers]
-static = "required"
-mca = "auto"
-coverage = "fallback"
-sanitizer = "fallback"
-concurrency = "fallback"
-profile = "fallback"
-
-[optimization]
-enabled = ["inputs", "atomic", "codegen", "layout"]
-default_budget_seconds = 30
-apply = "never"
-
-[targets]
-discover = "annotations"
-
-[policy.default]
-overall_coverage = 0.90
-critical_coverage = 1.0
-
-[optimization.codegen]
-max_candidates = 32
-
-[optimization.layout]
-max_candidates = 32
-cache_line_bytes = 64
-allow_public_abi_suggestions = false
-
-"#,
-        );
-        let found_tests = CovOpt_Analyzer::static_analysis::find_all_covopt_tests();
-
-        if found_tests.is_empty() {
-            println!("CovOpt-Analyzer: No #[covopt::test] found. Creating default template.");
-            default_config.push_str(
-                r#"[[target]]
-test = "my_benchmark_test"
-expected = "O(1)"
-n_values = "1,500,10000"
-"#,
-            );
-        } else {
-            println!(
-                "CovOpt-Analyzer: Auto-discovered {} test(s). Generating config.",
-                found_tests.len()
-            );
-            for (test_name, exp, n_vals) in found_tests {
-                default_config.push_str(&format!(
-                    r#"[[target]]
-test = "{}"
-expected = "{}"
-n_values = "{}"
-
-"#,
-                    test_name, exp, n_vals
-                ));
-            }
-        }
-
-        if let Err(e) = std::fs::write(&config_path, default_config) {
-            eprintln!("Failed to write .covopt.toml: {}", e);
+        let default_config = CovOpt_Analyzer::config::default_config_source(true);
+        let temporary = PathBuf::from(".covopt.toml.covopt-init.tmp");
+        if let Err(error) =
+            fs::write(&temporary, default_config).and_then(|_| fs::rename(&temporary, &config_path))
+        {
+            let _ = fs::remove_file(&temporary);
+            eprintln!("Failed to create .covopt.toml: {error}");
             std::process::exit(1);
         }
-        println!("Successfully initialized .covopt.toml. Please edit it to match your target.");
-    }
-
-    // Append to .gitignore
-    if let Ok(mut content) = std::fs::read_to_string(".gitignore") {
-        if !content.contains(".covopt/") {
-            if !content.ends_with('\n') && !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(".covopt/\n");
-            let _ = std::fs::write(".gitignore", content);
-            println!("Added .covopt/ to .gitignore.");
-        }
-    } else {
-        let _ = std::fs::write(".gitignore", ".covopt/\n");
-        println!("Created .gitignore and added .covopt/.");
-    }
-
-    // Append to Cargo.toml exclude
-    if let Ok(mut content) = std::fs::read_to_string("Cargo.toml")
-        && !content.contains("\".covopt/\"")
-        && !content.contains("'.covopt/'")
-    {
-        if let Some(idx) = content.find("exclude = [") {
-            let insert_pos = idx + "exclude = [".len();
-            content.insert_str(insert_pos, "\".covopt/\", ");
-            let _ = std::fs::write("Cargo.toml", content);
-            println!("Added .covopt/ to exclude array in Cargo.toml.");
-        } else if let Some(idx) = content.find("[package]") {
-            let end_idx = content[idx..]
-                .find("\n[")
-                .map(|i| idx + i)
-                .unwrap_or(content.len());
-            content.insert_str(end_idx, "\nexclude = [\".covopt/\"]\n");
-            let _ = std::fs::write("Cargo.toml", content);
-            println!("Added exclude = [\".covopt/\"] to Cargo.toml [package] section.");
-        }
-    }
-
-    // Inject AI Agent Rules
-    let agents_dir = Path::new(".agents");
-    let rules_dir = agents_dir.join("rules");
-
-    if let Err(e) = std::fs::create_dir_all(&rules_dir) {
-        eprintln!("Failed to create .agents/rules directory: {}", e);
-    } else {
-        let rule_file = rules_dir.join("covopt-rules.md");
-        if let Err(e) = std::fs::write(&rule_file, COVOPT_AGENT_RULES) {
-            eprintln!("Failed to write rule file {:?}: {}", rule_file, e);
-        } else {
-            println!("Injected AI agent rules to {:?}.", rule_file);
-        }
-
-        let agents_md = agents_dir.join("AGENTS.md");
-        let current_agents_md = std::fs::read_to_string(&agents_md).unwrap_or_default();
-
-        // Remove the old block if it exists
-        let mut new_agents_md = current_agents_md.clone();
-        if let Some(start_idx) =
-            new_agents_md.find("# CovOpt Optimization & Tuning Rules (Google Antigravity)")
-        {
-            // Skip the current header and find the next top-level header (e.g., "\n# ")
-            if let Some(end_offset) = new_agents_md[start_idx + 2..].find("\n# ") {
-                let end_idx = start_idx + 2 + end_offset;
-                // There's another rule block after this one, replace just this block
-                new_agents_md.replace_range(start_idx..end_idx, "");
-            } else {
-                // It's the last rule block, truncate from start_idx
-                new_agents_md.truncate(start_idx);
-            }
-        }
-
-        if !new_agents_md.ends_with('\n') && !new_agents_md.is_empty() {
-            new_agents_md.push('\n');
-        }
-        new_agents_md.push('\n');
-        new_agents_md.push_str(COVOPT_AGENT_RULES);
-        new_agents_md.push('\n');
-
-        if let Err(e) = std::fs::write(&agents_md, new_agents_md) {
-            eprintln!("Failed to update {:?}: {}", agents_md, e);
-        } else {
-            println!("Updated CovOpt rules in {:?}.", agents_md);
-        }
+        println!("Created .covopt.toml. Edit it only when project-specific policy is needed.");
     }
 }
 
@@ -1861,6 +1813,9 @@ coverage = "fallback"
 sanitizer = "fallback"
 concurrency = "fallback"
 profile = "fallback"
+temporal = "auto"
+relational = "auto"
+adversarial = "auto"
 
 [optimization]
 enabled = ["inputs", "atomic", "codegen", "layout"]
@@ -1956,12 +1911,12 @@ pub fn run_audit(args: &CovOpt_Analyzer::config::AuditArgs) {
     }
     let config_path = ".covopt.toml";
     if !PathBuf::from(config_path).exists() {
-        eprintln!("CovOpt-Analyzer: Config file {} not found.", config_path);
-        eprintln!("Please run `covopt init` to initialize the project first.");
-        std::process::exit(1);
+        eprintln!(
+            "CovOpt-Analyzer: .covopt.toml not found; using embedded policy and annotation discovery."
+        );
     }
 
-    let config = match CovOptConfig::load(config_path) {
+    let config = match CovOptConfig::load_or_embedded(config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{}", e);
@@ -2220,6 +2175,9 @@ pub fn run_audit(args: &CovOpt_Analyzer::config::AuditArgs) {
         let planned_compiler = plan_selects(&prepared_plan.initial, EvidenceProviderKind::Compiler);
         let planned_atomic =
             plan_selects(&prepared_plan.initial, EvidenceProviderKind::AtomicModel);
+        let planned_temporal = plan_selects(&prepared_plan.initial, EvidenceProviderKind::Temporal);
+        let planned_relational =
+            plan_selects(&prepared_plan.initial, EvidenceProviderKind::Relational);
         let planned_adversarial =
             plan_selects(&prepared_plan.initial, EvidenceProviderKind::Adversarial);
         let planned_analysis = planned_coverage || planned_mca || planned_test;
@@ -2451,6 +2409,46 @@ pub fn run_audit(args: &CovOpt_Analyzer::config::AuditArgs) {
                 None,
             );
         }
+        if planned_temporal {
+            let (status, summary, details) = execute_target_temporal_contracts(&target);
+            assurance_report.apply_provider_evidence(
+                EvidenceProviderKind::Temporal,
+                status,
+                &summary,
+                Some(details),
+            );
+        }
+        if planned_relational {
+            let (status, summary, details) = execute_target_relational_contracts(&target);
+            assurance_report.apply_provider_evidence(
+                EvidenceProviderKind::Relational,
+                status,
+                &summary,
+                Some(details),
+            );
+        }
+        if planned_adversarial {
+            let action_budget_ms = prepared_plan
+                .initial
+                .selected_action_details
+                .iter()
+                .find(|action| action.provider.0 == "Adversarial")
+                .map(|action| action.estimated_cost_ms)
+                .unwrap_or(config.trials.timeout_ms)
+                .max(1);
+            let (status, summary, details) = execute_target_adversarial_search(
+                &target,
+                &config,
+                assurance_report.coverage.unknown_obligation_count,
+                action_budget_ms,
+            );
+            assurance_report.apply_provider_evidence(
+                EvidenceProviderKind::Adversarial,
+                status,
+                &summary,
+                Some(details),
+            );
+        }
         assurance_report.line_coverage_percent = if planned_coverage && analysis_passed {
             Some(line_coverage_value)
         } else {
@@ -2625,7 +2623,7 @@ pub fn run_audit(args: &CovOpt_Analyzer::config::AuditArgs) {
             )
         });
         for action in &mut follow_up_actions {
-            if !check_executes_provider(&action.provider.0) {
+            if !target_executes_provider(&target, &action.provider.0) {
                 action.available = false;
                 action.description.push_str("; no automatic check executor");
             }
@@ -3068,102 +3066,12 @@ fn collect_structured_findings(
     file: &Path,
     function_filter: Option<&str>,
 ) -> Result<CovOpt_Analyzer::findings::FindingReport, String> {
-    let source = fs::read_to_string(file).map_err(|error| error.to_string())?;
-    let ast = syn::parse_file(&source).map_err(|error| error.to_string())?;
-    let mut report = CovOpt_Analyzer::findings::FindingReport::default();
-    report
-        .findings
-        .extend(CovOpt_Analyzer::dataflow::analyze_file(file));
-    for item in ast.items {
-        match item {
-            syn::Item::Fn(item_fn) => {
-                let name = item_fn.sig.ident.to_string();
-                if function_filter.is_some_and(|wanted| wanted != name) {
-                    continue;
-                }
-                let mut findings =
-                    CovOpt_Analyzer::advisor::EncapsulationAdvisor::analyze(&item_fn, None)
-                        .findings;
-                for finding in &mut findings {
-                    finding.location.file = file.display().to_string();
-                    finding.function = Some(name.clone());
-                    finding.id = CovOpt_Analyzer::findings::stable_finding_id(
-                        finding.kind,
-                        &finding.location.file,
-                        finding.location.line,
-                        finding.function.as_deref(),
-                    );
-                    finding.explanation = CovOpt_Analyzer::findings::FindingFormatter::explanation(
-                        finding.kind,
-                        &name,
-                    );
-                }
-                report.findings.extend(findings);
-            }
-            syn::Item::Struct(item_struct) => {
-                let mut findings =
-                    CovOpt_Analyzer::advisor::EncapsulationAdvisor::analyze_struct(&item_struct)
-                        .findings;
-                for finding in &mut findings {
-                    finding.location.file = file.display().to_string();
-                    finding.function = Some(item_struct.ident.to_string());
-                    finding.id = CovOpt_Analyzer::findings::stable_finding_id(
-                        finding.kind,
-                        &finding.location.file,
-                        finding.location.line,
-                        finding.function.as_deref(),
-                    );
-                }
-                report.findings.extend(findings);
-            }
-            _ => {}
-        }
-    }
-    report
-        .findings
-        .sort_by(|left, right| left.id.cmp(&right.id));
-    report.findings.dedup_by(|left, right| left.id == right.id);
-    let codegen = CovOpt_Analyzer::codegen_optimizer::generate_candidates(
-        &source,
+    CovOpt_Analyzer::findings::analyze_source(
         file,
-        &report.findings,
+        function_filter,
+        &Default::default(),
         &Default::default(),
     )
-    .unwrap_or_default();
-    for candidate in &codegen {
-        for finding in &mut report.findings {
-            if candidate.repair.resolves.contains(&finding.id) {
-                finding.repair_candidates.push(candidate.repair.id.clone());
-            }
-        }
-    }
-    report
-        .repair_candidates
-        .extend(codegen.into_iter().map(|candidate| candidate.repair));
-    for model in
-        CovOpt_Analyzer::layout_optimizer::extract_layout(&source, None).unwrap_or_default()
-    {
-        let findings =
-            CovOpt_Analyzer::layout_optimizer::layout_findings(&model, file.display().to_string());
-        let layout_candidates = CovOpt_Analyzer::layout_optimizer::generate_candidates(
-            &model,
-            &findings,
-            &Default::default(),
-        );
-        for candidate in &layout_candidates {
-            for finding in &mut report.findings {
-                if candidate.repair.resolves.contains(&finding.id) {
-                    finding.repair_candidates.push(candidate.repair.id.clone());
-                }
-            }
-        }
-        report.repair_candidates.extend(
-            layout_candidates
-                .into_iter()
-                .map(|candidate| candidate.repair),
-        );
-    }
-    Ok(report)
 }
 
 fn run_parameter_optimize(args: &CovOpt_Analyzer::config::ParameterOptimizeArgs) -> bool {
@@ -3212,6 +3120,8 @@ fn run_parameter_optimize(args: &CovOpt_Analyzer::config::ParameterOptimizeArgs)
         "search_score": result.search_score,
         "confirmation_score": result.confirmation_score,
         "robustness_scores": result.robustness_scores,
+        "robustness_observations": result.robustness_observations,
+        "robustness_score_floor": result.robustness_score_floor,
         "confirmed": result.confirmed,
         "robustness_verified": result.robustness_verified,
         "evaluated_candidates": result.evaluated_candidates,
@@ -3257,7 +3167,7 @@ fn run_parameter_optimize(args: &CovOpt_Analyzer::config::ParameterOptimizeArgs)
 }
 
 pub fn run_optimize(args: &CovOpt_Analyzer::config::OptimizeArgs) -> bool {
-    let config = CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml").ok();
+    let config = CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml").ok();
     match &args.command {
         CovOpt_Analyzer::config::OptimizeSubcommand::Parameters(args) => {
             run_parameter_optimize(args)
@@ -3293,7 +3203,7 @@ pub fn run_optimize(args: &CovOpt_Analyzer::config::OptimizeArgs) -> bool {
                     max_candidates: config.optimization.codegen.max_candidates,
                 }
             });
-            let candidates = match CovOpt_Analyzer::codegen_optimizer::generate_candidates(
+            let mut candidates = match CovOpt_Analyzer::codegen_optimizer::generate_candidates(
                 &source,
                 &source_path,
                 &report.findings,
@@ -3305,7 +3215,51 @@ pub fn run_optimize(args: &CovOpt_Analyzer::config::OptimizeArgs) -> bool {
                     return false;
                 }
             };
-            let output = serde_json::json!({ "target": source_path, "candidates": candidates, "apply_requested": args.apply, "sandbox_required": true });
+            let budget_ms = match parse_plan_budget(&args.budget) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("CovOpt optimize codegen: {error}");
+                    return false;
+                }
+            };
+            let evaluation_started = std::time::Instant::now();
+            let workspace = match std::env::current_dir() {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("CovOpt optimize codegen: {error}");
+                    return false;
+                }
+            };
+            for candidate in &mut candidates {
+                if evaluation_started.elapsed().as_millis() as u64 >= budget_ms {
+                    candidate.status =
+                        CovOpt_Analyzer::codegen_optimizer::CodegenCandidateStatus::Rejected;
+                    continue;
+                }
+                match CovOpt_Analyzer::codegen_optimizer::evaluate_in_sandbox(
+                    &workspace,
+                    &workspace.join("Cargo.toml"),
+                    candidate,
+                ) {
+                    Ok(evaluation) => {
+                        candidate.baseline_metrics = evaluation.baseline_metrics;
+                        candidate.candidate_metrics = evaluation.metrics;
+                        candidate.status = if !evaluation.compile_passed {
+                            CovOpt_Analyzer::codegen_optimizer::CodegenCandidateStatus::CompileFailed
+                        } else if !evaluation.verification_passed {
+                            CovOpt_Analyzer::codegen_optimizer::CodegenCandidateStatus::VerificationFailed
+                        } else {
+                            CovOpt_Analyzer::codegen_optimizer::CodegenCandidateStatus::Evaluated
+                        };
+                    }
+                    Err(_) => {
+                        candidate.status =
+                            CovOpt_Analyzer::codegen_optimizer::CodegenCandidateStatus::VerificationFailed;
+                    }
+                }
+            }
+            let frontier = CovOpt_Analyzer::codegen_optimizer::pareto_frontier(&candidates);
+            let output = serde_json::json!({ "target": source_path, "candidates": candidates, "pareto_frontier": frontier, "apply_requested": args.apply, "sandbox_required": true });
             if args.json {
                 println!(
                     "{}",
@@ -3364,11 +3318,28 @@ pub fn run_optimize(args: &CovOpt_Analyzer::config::OptimizeArgs) -> bool {
                     &model,
                     source_path.display().to_string(),
                 );
-                candidates.extend(CovOpt_Analyzer::layout_optimizer::generate_candidates(
+                let mut generated = CovOpt_Analyzer::layout_optimizer::generate_candidates(
                     &model,
                     &findings,
                     &layout_config,
-                ));
+                );
+                for candidate in &mut generated {
+                    match CovOpt_Analyzer::layout_optimizer::materialize_candidate(
+                        &source,
+                        &source_path,
+                        candidate,
+                        layout_config.cache_line_bytes,
+                    ) {
+                        Ok(Some(edit)) => candidate.repair.changes.push(edit),
+                        Ok(None) => candidate.repair.suggestion_only = true,
+                        Err(error) => {
+                            candidate.repair.suggestion_only = true;
+                            candidate.safety =
+                                format!("{}; materialization failed: {error}", candidate.safety);
+                        }
+                    }
+                }
+                candidates.extend(generated);
             }
             let output = serde_json::json!({ "target": source_path, "candidates": candidates, "profile_requested": args.profile, "apply_requested": args.apply });
             if args.json {
@@ -3493,7 +3464,30 @@ fn unsafe_evidence_is_current(source: &Path) -> bool {
 }
 
 pub fn run_repair_plan(args: &CovOpt_Analyzer::config::FixArgs) -> bool {
-    let config = CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml").ok();
+    if let Some(manifest) = args.rollback.as_deref() {
+        return match CovOpt_Analyzer::repair::rollback_transaction(Path::new(manifest)) {
+            Ok(transaction) => {
+                if args.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&transaction).unwrap_or_default()
+                    );
+                } else {
+                    println!(
+                        "Rolled back candidate {} across {} file(s)",
+                        transaction.candidate_hash,
+                        transaction.files.len()
+                    );
+                }
+                true
+            }
+            Err(error) => {
+                eprintln!("CovOpt fix rollback: {error}");
+                false
+            }
+        };
+    }
+    let config = CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml").ok();
     let source_path = match resolve_optimizer_source(args.path.as_deref()) {
         Ok(path) => path,
         Err(error) => {
@@ -3569,26 +3563,106 @@ pub fn run_repair_plan(args: &CovOpt_Analyzer::config::FixArgs) -> bool {
             &model,
             source_path.display().to_string(),
         );
-        repairs.extend(
-            CovOpt_Analyzer::layout_optimizer::generate_candidates(
-                &model,
-                &findings,
-                &layout_config,
-            )
-            .into_iter()
-            .map(|candidate| candidate.repair),
+        let mut layout_candidates = CovOpt_Analyzer::layout_optimizer::generate_candidates(
+            &model,
+            &findings,
+            &layout_config,
         );
+        for candidate in &mut layout_candidates {
+            match CovOpt_Analyzer::layout_optimizer::materialize_candidate(
+                &source,
+                &source_path,
+                candidate,
+                layout_config.cache_line_bytes,
+            ) {
+                Ok(Some(edit)) => candidate.repair.changes.push(edit),
+                Ok(None) | Err(_) => candidate.repair.suggestion_only = true,
+            }
+        }
+        repairs.extend(
+            layout_candidates
+                .into_iter()
+                .map(|candidate| candidate.repair),
+        );
+    }
+    if let Some(config) = config.as_ref() {
+        let atomic_policy = &config.atomic;
+        if atomic_policy.enabled
+            && atomic_policy.synthesize
+            && let Ok(request) = CovOpt_Analyzer::atomic_synth::request_from_file(
+                &source_path,
+                atomic_policy.correctness_contract(),
+                atomic_policy.bounds(),
+                atomic_policy.timeout_ms.unwrap_or(5_000),
+                true,
+            )
+        {
+            let synthesis = CovOpt_Analyzer::atomic_synth::synthesize(&request);
+            if let (Some(selected), Some(patch)) = (synthesis.selected, synthesis.patch) {
+                let resolves = report
+                    .findings
+                    .iter()
+                    .filter(|finding| {
+                        finding.kind == CovOpt_Analyzer::findings::FindingKind::ManualCasLoop
+                    })
+                    .map(|finding| finding.id.clone())
+                    .collect::<Vec<_>>();
+                if !resolves.is_empty() {
+                    repairs.push(CovOpt_Analyzer::repair::RepairCandidate {
+                        id: CovOpt_Analyzer::repair::RepairCandidateId(format!(
+                            "atomic-{}",
+                            selected.id
+                        )),
+                        kind: CovOpt_Analyzer::repair::RepairKind::ReplaceManualCas,
+                        resolves,
+                        changes: CovOpt_Analyzer::atomic_synth::patch_source_edits(&patch),
+                        dependencies: Vec::new(),
+                        conflicts: Vec::new(),
+                        semantic_risk: CovOpt_Analyzer::repair::RiskLevel::High,
+                        api_risk: CovOpt_Analyzer::repair::RiskLevel::Low,
+                        abi_risk: CovOpt_Analyzer::repair::RiskLevel::Low,
+                        estimated_benefit: Default::default(),
+                        verification: report
+                            .findings
+                            .iter()
+                            .filter(|finding| {
+                                finding.kind
+                                    == CovOpt_Analyzer::findings::FindingKind::ManualCasLoop
+                            })
+                            .flat_map(|finding| finding.obligations.iter().cloned())
+                            .collect(),
+                        suggestion_only: false,
+                        description: format!(
+                            "bounded atomic ordering repair; {}",
+                            synthesis.bounded_scope
+                        ),
+                    });
+                }
+            }
+        }
     }
     let mut policy = CovOpt_Analyzer::repair::RepairPolicy::default();
     policy.budget_ms = parse_plan_budget(&args.budget).unwrap_or(policy.budget_ms);
+    policy.allow_high_risk = args.unsafe_evidence;
     let plan = CovOpt_Analyzer::repair::plan_repairs(&report.findings, &repairs, &policy);
     let evidence_obligations =
         CovOpt_Analyzer::assurance::discover_obligations(&source_path, "repair-apply");
-    let evidence_actions = CovOpt_Analyzer::assurance::discover_evidence_actions(
+    let mut evidence_actions = CovOpt_Analyzer::assurance::discover_evidence_actions(
         &CovOpt_Analyzer::assurance::planning_providers(),
         &evidence_obligations,
         &CovOpt_Analyzer::assurance::planner_tool_context(),
     );
+    for action in &mut evidence_actions {
+        if !matches!(
+            action.provider.0.as_str(),
+            "StaticAst" | "Compiler" | "Test" | "Coverage" | "Mca" | "AtomicModel"
+        ) {
+            action.available = false;
+            action
+                .description
+                .push_str("; no candidate-bound repair sandbox adapter");
+        }
+    }
     let evidence_plan = CovOpt_Analyzer::assurance::EvidencePlanner::new(Default::default())
         .plan(
             &evidence_obligations,
@@ -3597,6 +3671,8 @@ pub fn run_repair_plan(args: &CovOpt_Analyzer::config::FixArgs) -> bool {
         )
         .plan;
     let mut verification = Vec::new();
+    let mut candidate_evidence = None;
+    let mut repair_transaction = None;
     if args.apply && plan.critical_resolved {
         if !evidence_obligations.is_empty()
             && !matches!(
@@ -3659,68 +3735,58 @@ pub fn run_repair_plan(args: &CovOpt_Analyzer::config::FixArgs) -> bool {
                 return false;
             }
         };
-        let absolute_source = if source_path.is_absolute() {
-            source_path.clone()
-        } else {
-            workspace.join(&source_path)
-        };
-        let verification_result = match CovOpt_Analyzer::repair::verify_edits_in_sandbox(
-            &workspace,
-            &workspace.join("Cargo.toml"),
-            &absolute_source,
-            &source,
-            &edits,
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                eprintln!("CovOpt fix: sandbox verification failed: {}", error);
-                return false;
-            }
-        };
+        let verification_result =
+            match CovOpt_Analyzer::repair::verify_candidate_evidence_in_sandbox(
+                &workspace,
+                &workspace.join("Cargo.toml"),
+                &edits,
+                &evidence_plan,
+                None,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("CovOpt fix: sandbox verification failed: {}", error);
+                    return false;
+                }
+            };
         if !verification_result.passed {
-            eprintln!("CovOpt fix: sandbox cargo check failed; no source was modified");
+            eprintln!(
+                "CovOpt fix: candidate evidence failed for actions [{}]; no source was modified",
+                verification_result.failed_actions.join(", ")
+            );
             return false;
         }
-        match CovOpt_Analyzer::repair::apply_edits_safely(&source, &edits) {
-            Ok(updated) if updated != source => {
-                if syn::parse_file(&updated).is_err() {
-                    eprintln!("CovOpt fix: static AST validation failed; no source was modified");
+        let verification_cost_ms = verification_result
+            .actions
+            .iter()
+            .map(|action| action.actual_cost_ms)
+            .sum();
+        let verification_summary = format!(
+            "candidate {} passed {} sandbox evidence actions",
+            verification_result.candidate_hash,
+            verification_result.actions.len()
+        );
+        let transaction =
+            match CovOpt_Analyzer::repair::apply_edits_transactionally(&workspace, &edits) {
+                Ok(transaction) => transaction,
+                Err(error) => {
+                    eprintln!("CovOpt fix: transactional apply failed: {error}");
                     return false;
                 }
-                if let Err(error) =
-                    CovOpt_Analyzer::parameters::ParameterDependencyGraph::from_source(
-                        &updated,
-                        &source_path.display().to_string(),
-                    )
-                {
-                    eprintln!(
-                        "CovOpt fix: parameter/scope metadata validation failed: {error}; no source was modified"
-                    );
-                    return false;
-                }
-                if let Err(error) = fs::write(&source_path, updated) {
-                    eprintln!("CovOpt fix: {}", error);
-                    return false;
-                }
-                for candidate in selected {
-                    verification.push(CovOpt_Analyzer::repair::VerificationResult {
-                        candidate_id: candidate.id.clone(),
-                        passed: true,
-                        compile_passed: verification_result.compile_passed,
-                        safety_passed: false,
-                        regression: false,
-                        summary: "sandbox cargo check passed; safety/MCA verification remains recorded as required"
-                            .to_string(),
-                        actual_cost_ms: 0,
-                    });
-                }
-            }
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!("CovOpt fix: {}", error);
-                return false;
-            }
+            };
+        for candidate in selected {
+            verification.push(CovOpt_Analyzer::repair::VerificationResult {
+                candidate_id: candidate.id.clone(),
+                passed: true,
+                compile_passed: verification_result.compile_passed,
+                safety_passed: true,
+                regression: false,
+                summary: verification_summary.clone(),
+                actual_cost_ms: verification_cost_ms,
+            });
         }
+        candidate_evidence = Some(verification_result);
+        repair_transaction = Some(transaction);
     }
     let _ = fs::create_dir_all("target/covopt");
     let _ = CovOpt_Analyzer::repair::write_manifest(
@@ -3728,7 +3794,7 @@ pub fn run_repair_plan(args: &CovOpt_Analyzer::config::FixArgs) -> bool {
         &plan,
         &verification,
     );
-    let output = serde_json::json!({ "findings": report.findings, "candidates": repairs, "plan": plan, "evidence_plan": evidence_plan, "verification": verification, "apply_requested": args.apply });
+    let output = serde_json::json!({ "findings": report.findings, "candidates": repairs, "plan": plan, "evidence_plan": evidence_plan, "candidate_evidence": candidate_evidence, "transaction": repair_transaction, "verification": verification, "apply_requested": args.apply });
     if args.json {
         println!(
             "{}",
@@ -3760,7 +3826,10 @@ pub fn run_check(args: &CovOpt_Analyzer::config::CheckArgs) -> Result<(), String
     }
     CovOpt_Analyzer::runner::install_ci_deadline(std::time::Duration::from_millis(budget_ms))?;
     eprintln!("CovOpt check wall-clock budget: {}", args.budget);
-    let config = CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml")?;
+    if args.plan && !Path::new(".covopt.toml").exists() {
+        eprintln!("CovOpt check: using embedded policy and annotation discovery.");
+    }
+    let config = CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml")?;
     let mode = args.mode.unwrap_or(config.assurance.mode);
     if args.plan {
         let plan_args = CovOpt_Analyzer::config::PlanArgs {
@@ -3803,7 +3872,7 @@ pub fn run_inspect_command(
     args: &CovOpt_Analyzer::config::InspectCommandArgs,
 ) -> Result<(), String> {
     if args.config {
-        let config = CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml")?;
+        let config = CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml")?;
         let resolved = config
             .target
             .iter()
@@ -3826,7 +3895,7 @@ pub fn run_inspect_command(
             .target
             .clone()
             .or_else(|| {
-                CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml")
+                CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml")
                     .ok()
                     .and_then(|config| config.target.first().map(|target| target.test.clone()))
             })
@@ -3943,54 +4012,9 @@ pub fn run_inspect_command(
     run_inspect(&legacy)
 }
 
-struct SnapshotAdversarialOracle {
-    unknown_obligations: usize,
-}
-
-impl CovOpt_Analyzer::adversarial::AdversarialOracle for SnapshotAdversarialOracle {
-    fn evaluate(
-        &mut self,
-        sample: &CovOpt_Analyzer::adversarial::EnvironmentSample,
-        objective: CovOpt_Analyzer::adversarial::AdversarialObjective,
-    ) -> CovOpt_Analyzer::adversarial::OracleResult {
-        let threads = sample.sample.threads.unwrap_or(1) as f64;
-        let n = sample.sample.n.unwrap_or(1) as f64;
-        let score = match objective {
-            CovOpt_Analyzer::adversarial::AdversarialObjective::ComplexityDeviation => n.log2(),
-            CovOpt_Analyzer::adversarial::AdversarialObjective::Contention => threads * n.log2(),
-            CovOpt_Analyzer::adversarial::AdversarialObjective::UnknownObligations => {
-                self.unknown_obligations as f64
-            }
-            _ => self.unknown_obligations as f64 + threads,
-        };
-        let status = if self.unknown_obligations > 0 {
-            CovOpt_Analyzer::assurance::ObligationStatus::Unknown
-        } else {
-            CovOpt_Analyzer::assurance::ObligationStatus::Modeled
-        };
-        CovOpt_Analyzer::adversarial::OracleResult {
-            status,
-            failed: false,
-            score,
-            summary: if self.unknown_obligations > 0 {
-                "snapshot contains unknown obligations; runtime oracle not yet selected".to_string()
-            } else {
-                "bounded static environment oracle evaluated candidate".to_string()
-            },
-            assumptions: if self.unknown_obligations > 0 {
-                vec![CovOpt_Analyzer::model::AssumptionId::new(
-                    "runtime-oracle-required",
-                )]
-            } else {
-                Vec::new()
-            },
-        }
-    }
-}
-
 fn run_adversarial_optimize(args: &CovOpt_Analyzer::config::AdversarialOptimizeArgs) -> bool {
     let target = args.target.clone().or_else(|| {
-        CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml")
+        CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml")
             .ok()
             .and_then(|config| config.target.first().map(|target| target.test.clone()))
     });
@@ -4039,9 +4063,20 @@ fn run_adversarial_optimize(args: &CovOpt_Analyzer::config::AdversarialOptimizeA
         ],
         max_candidates: 256,
     };
-    let mut oracle = SnapshotAdversarialOracle {
-        unknown_obligations,
+    let workspace = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("covopt optimize adversarial: {error}");
+            return false;
+        }
     };
+    let mut oracle = CovOpt_Analyzer::adversarial::CargoAdversarialOracle::new(
+        &workspace,
+        workspace.join("Cargo.toml"),
+        target.clone(),
+        std::time::Duration::from_millis(args.timeout_ms.max(1)),
+        unknown_obligations,
+    );
     match CovOpt_Analyzer::adversarial::search(&config, &mut oracle) {
         Ok(result) => {
             if args.json {
@@ -4075,7 +4110,7 @@ pub fn run_unified_optimize(args: &CovOpt_Analyzer::config::UnifiedOptimizeArgs)
                 seed_count: None,
                 dry_run: true,
             },
-            &match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
+            &match CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml") {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("CovOpt optimize inputs: {error}");
@@ -4091,7 +4126,7 @@ pub fn run_unified_optimize(args: &CovOpt_Analyzer::config::UnifiedOptimizeArgs)
                 );
                 return false;
             } else {
-                CovOpt_Analyzer::config::AtomicSubcommand::Analyze(
+                CovOpt_Analyzer::config::AtomicSubcommand::Synth(
                     CovOpt_Analyzer::config::AtomicTargetArgs {
                         target: input.target.clone(),
                         source: input.source.clone(),
@@ -4102,7 +4137,7 @@ pub fn run_unified_optimize(args: &CovOpt_Analyzer::config::UnifiedOptimizeArgs)
             };
             run_atomic(
                 &CovOpt_Analyzer::config::AtomicArgs { command },
-                &match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
+                &match CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml") {
                     Ok(config) => config,
                     Err(error) => {
                         eprintln!("CovOpt optimize atomic: {error}");
@@ -4191,29 +4226,14 @@ pub fn run_verify(args: &CovOpt_Analyzer::config::VerifyArgs) -> bool {
                 eprintln!("covopt verify temporal requires --event");
                 return false;
             };
-            let source = match trace_source_for_target(target) {
-                Ok(source) => source,
-                Err(error) => {
-                    eprintln!("covopt verify temporal: {error}");
-                    return false;
-                }
-            };
-            let trace = match CovOpt_Analyzer::trace::static_trace_from_source(
-                &source,
-                CovOpt_Analyzer::static_analysis::find_covopt_target_metadata(target)
-                    .map(|metadata| metadata.function)
-                    .as_deref(),
-                CovOpt_Analyzer::model::SampleKey {
-                    seed: Some(0),
-                    ..Default::default()
-                },
-            ) {
-                Ok(trace) => trace,
-                Err(error) => {
-                    eprintln!("covopt verify temporal: {error}");
-                    return false;
-                }
-            };
+            let (trace, trace_origin) =
+                match runtime_or_static_trace(target, input.trace.as_deref(), input.timeout_ms) {
+                    Ok(trace) => trace,
+                    Err(error) => {
+                        eprintln!("covopt verify temporal: {error}");
+                        return false;
+                    }
+                };
             let operator = match input.operator.to_ascii_lowercase().as_str() {
                 "always" => CovOpt_Analyzer::trace::TemporalOperator::Always,
                 "eventually" => CovOpt_Analyzer::trace::TemporalOperator::Eventually,
@@ -4252,10 +4272,14 @@ pub fn run_verify(args: &CovOpt_Analyzer::config::VerifyArgs) -> bool {
                     if input.json {
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "trace_origin": trace_origin,
+                                "result": result,
+                            }))
+                            .unwrap_or_default()
                         );
                     } else {
-                        println!("{}", result.summary);
+                        println!("{} [{}]", result.summary, trace_origin);
                     }
                     let passed = matches!(
                         result.status,
@@ -4281,8 +4305,12 @@ pub fn run_verify(args: &CovOpt_Analyzer::config::VerifyArgs) -> bool {
                 eprintln!("covopt verify relational requires --base <SOURCE>");
                 return false;
             };
-            let current_source = match trace_source_for_target(target) {
-                Ok(source) => source,
+            let (left, left_origin) = match runtime_or_static_trace(
+                target,
+                input.current_trace.as_deref(),
+                input.timeout_ms,
+            ) {
+                Ok(trace) => trace,
                 Err(error) => {
                     eprintln!("covopt verify relational: {error}");
                     return false;
@@ -4295,28 +4323,22 @@ pub fn run_verify(args: &CovOpt_Analyzer::config::VerifyArgs) -> bool {
             }
             let function = CovOpt_Analyzer::static_analysis::find_covopt_target_metadata(target)
                 .map(|metadata| metadata.function);
-            let left = CovOpt_Analyzer::trace::static_trace_from_source(
-                &current_source,
-                function.as_deref(),
-                CovOpt_Analyzer::model::SampleKey {
-                    seed: Some(0),
-                    ..Default::default()
+            let (right, right_origin) = match CovOpt_Analyzer::trace::read_trace(&base_source) {
+                Ok(trace) => (trace, "runtime-trace".to_string()),
+                Err(_) => match CovOpt_Analyzer::trace::static_trace_from_source(
+                    &base_source,
+                    function.as_deref(),
+                    CovOpt_Analyzer::model::SampleKey {
+                        seed: Some(0),
+                        ..Default::default()
+                    },
+                ) {
+                    Ok(trace) => (trace, "static-source-fallback".to_string()),
+                    Err(error) => {
+                        eprintln!("covopt verify relational: {error}");
+                        return false;
+                    }
                 },
-            );
-            let right = CovOpt_Analyzer::trace::static_trace_from_source(
-                &base_source,
-                function.as_deref(),
-                CovOpt_Analyzer::model::SampleKey {
-                    seed: Some(0),
-                    ..Default::default()
-                },
-            );
-            let (left, right) = match (left, right) {
-                (Ok(left), Ok(right)) => (left, right),
-                (Err(error), _) | (_, Err(error)) => {
-                    eprintln!("covopt verify relational: {error}");
-                    return false;
-                }
             };
             match CovOpt_Analyzer::trace::compare_traces(
                 &left,
@@ -4339,17 +4361,27 @@ pub fn run_verify(args: &CovOpt_Analyzer::config::VerifyArgs) -> bool {
                     if input.json {
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "left_origin": left_origin,
+                                "right_origin": right_origin,
+                                "result": result,
+                            }))
+                            .unwrap_or_default()
                         );
                     } else {
-                        println!("{}", result.summary);
+                        println!(
+                            "{} [left={}, right={}]",
+                            result.summary, left_origin, right_origin
+                        );
                     }
-                    matches!(
+                    let passed = matches!(
                         result.status,
                         CovOpt_Analyzer::assurance::ObligationStatus::Proven
                             | CovOpt_Analyzer::assurance::ObligationStatus::Modeled
                             | CovOpt_Analyzer::assurance::ObligationStatus::Observed
-                    )
+                    );
+                    record_unsafe_evidence(target, "relational", passed);
+                    passed
                 }
                 Err(error) => {
                     eprintln!("covopt verify relational: {error}");
@@ -4367,4 +4399,278 @@ fn trace_source_for_target(target: &str) -> Result<PathBuf, String> {
     }
     CovOpt_Analyzer::assurance::find_target_source(target)
         .ok_or_else(|| format!("could not resolve source for target '{target}'"))
+}
+
+fn aggregate_contract_status(
+    statuses: impl IntoIterator<Item = CovOpt_Analyzer::assurance::ObligationStatus>,
+) -> CovOpt_Analyzer::assurance::ObligationStatus {
+    use CovOpt_Analyzer::assurance::ObligationStatus;
+    let statuses = statuses.into_iter().collect::<Vec<_>>();
+    if statuses.contains(&ObligationStatus::Failed) {
+        ObligationStatus::Failed
+    } else if statuses.is_empty() || statuses.contains(&ObligationStatus::Unknown) {
+        ObligationStatus::Unknown
+    } else if statuses.contains(&ObligationStatus::Modeled) {
+        ObligationStatus::Modeled
+    } else if statuses.contains(&ObligationStatus::Observed) {
+        ObligationStatus::Observed
+    } else {
+        ObligationStatus::Proven
+    }
+}
+
+fn execute_target_temporal_contracts(
+    target: &TargetConfig,
+) -> (
+    CovOpt_Analyzer::assurance::ObligationStatus,
+    String,
+    serde_json::Value,
+) {
+    let mut results = Vec::new();
+    for configured in &target.temporal {
+        let result = runtime_or_static_trace(
+            &target.test,
+            configured.trace.as_deref(),
+            configured.timeout_ms,
+        )
+        .and_then(|(trace, origin)| {
+            CovOpt_Analyzer::trace::check_temporal(
+                &trace,
+                &configured.contract(),
+                std::time::Duration::from_millis(configured.timeout_ms.max(1)),
+            )
+            .map(|result| (origin, result))
+        });
+        match result {
+            Ok((origin, result)) => results.push(serde_json::json!({
+                "name": configured.name,
+                "trace_origin": origin,
+                "status": result.status,
+                "result": result,
+            })),
+            Err(error) => results.push(serde_json::json!({
+                "name": configured.name,
+                "status": CovOpt_Analyzer::assurance::ObligationStatus::Unknown,
+                "error": error,
+            })),
+        }
+    }
+    let status = aggregate_contract_status(
+        results
+            .iter()
+            .filter_map(|result| serde_json::from_value(result.get("status")?.clone()).ok()),
+    );
+    (
+        status,
+        format!(
+            "executed {} configured temporal contract(s); aggregate={status:?}",
+            results.len()
+        ),
+        serde_json::json!({ "contracts": results }),
+    )
+}
+
+fn execute_target_relational_contracts(
+    target: &TargetConfig,
+) -> (
+    CovOpt_Analyzer::assurance::ObligationStatus,
+    String,
+    serde_json::Value,
+) {
+    let mut results = Vec::new();
+    for configured in &target.relational {
+        let result = (|| {
+            let (current, current_origin) = runtime_or_static_trace(
+                &target.test,
+                configured.current_trace.as_deref(),
+                configured.timeout_ms,
+            )?;
+            let base_path = PathBuf::from(&configured.base);
+            if !base_path.is_file() {
+                return Err(format!(
+                    "relational baseline not found: {}",
+                    base_path.display()
+                ));
+            }
+            let function =
+                CovOpt_Analyzer::static_analysis::find_covopt_target_metadata(&target.test)
+                    .map(|metadata| metadata.function);
+            let (base, base_origin) = match CovOpt_Analyzer::trace::read_trace(&base_path) {
+                Ok(trace) => (trace, "runtime-trace".to_string()),
+                Err(_) => (
+                    CovOpt_Analyzer::trace::static_trace_from_source(
+                        &base_path,
+                        function.as_deref(),
+                        CovOpt_Analyzer::model::SampleKey {
+                            seed: Some(0),
+                            ..Default::default()
+                        },
+                    )?,
+                    "static-source-fallback".to_string(),
+                ),
+            };
+            CovOpt_Analyzer::trace::compare_traces(&current, &base, &configured.contract())
+                .map(|result| (current_origin, base_origin, result))
+        })();
+        match result {
+            Ok((current_origin, base_origin, result)) => results.push(serde_json::json!({
+                "name": configured.name,
+                "current_origin": current_origin,
+                "base_origin": base_origin,
+                "status": result.status,
+                "result": result,
+            })),
+            Err(error) => results.push(serde_json::json!({
+                "name": configured.name,
+                "status": CovOpt_Analyzer::assurance::ObligationStatus::Unknown,
+                "error": error,
+            })),
+        }
+    }
+    let status = aggregate_contract_status(
+        results
+            .iter()
+            .filter_map(|result| serde_json::from_value(result.get("status")?.clone()).ok()),
+    );
+    (
+        status,
+        format!(
+            "executed {} configured relational contract(s); aggregate={status:?}",
+            results.len()
+        ),
+        serde_json::json!({ "contracts": results }),
+    )
+}
+
+fn execute_target_adversarial_search(
+    target: &TargetConfig,
+    config: &CovOptConfig,
+    unknown_obligations: usize,
+    budget_ms: u64,
+) -> (
+    CovOpt_Analyzer::assurance::ObligationStatus,
+    String,
+    serde_json::Value,
+) {
+    use CovOpt_Analyzer::adversarial::{
+        AdversarialConfig, AdversarialObjective, CargoAdversarialOracle, EnvironmentDimension,
+        EnvironmentDomain, SearchStatus,
+    };
+    use CovOpt_Analyzer::assurance::ObligationStatus;
+
+    let mut domains = Vec::new();
+    let n_values = target
+        .n_values
+        .as_deref()
+        .into_iter()
+        .flat_map(|values| values.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !n_values.is_empty() {
+        domains.push(EnvironmentDomain {
+            dimension: EnvironmentDimension::N,
+            values: n_values,
+            explicit_bound: true,
+        });
+    }
+    let atomic = target.atomic.as_ref().unwrap_or(&config.atomic);
+    if let Some(max_threads) = atomic.max_threads.filter(|threads| *threads > 1) {
+        domains.push(EnvironmentDomain {
+            dimension: EnvironmentDimension::Threads,
+            values: vec!["1".to_string(), max_threads.to_string()],
+            explicit_bound: true,
+        });
+    }
+    let mut objectives = vec![AdversarialObjective::RuntimeRegression];
+    if domains
+        .iter()
+        .any(|domain| domain.dimension == EnvironmentDimension::Threads)
+    {
+        objectives.push(AdversarialObjective::Contention);
+    }
+    if unknown_obligations > 0 {
+        objectives.push(AdversarialObjective::UnknownObligations);
+    }
+    let search_config = AdversarialConfig {
+        target: target.test.clone(),
+        budget_ms: budget_ms.max(1),
+        seed: config.trials.seed.unwrap_or(0),
+        objectives,
+        domains,
+        max_candidates: config.trials.max_candidates.max(1),
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            return (
+                ObligationStatus::Unknown,
+                format!("adversarial workspace unavailable: {error}"),
+                serde_json::json!({ "error": error.to_string() }),
+            );
+        }
+    };
+    let per_environment_timeout = config.trials.timeout_ms.min(budget_ms).max(1);
+    let mut oracle = CargoAdversarialOracle::new(
+        &workspace,
+        workspace.join("Cargo.toml"),
+        target.test.clone(),
+        std::time::Duration::from_millis(per_environment_timeout),
+        unknown_obligations,
+    );
+    match CovOpt_Analyzer::adversarial::search(&search_config, &mut oracle) {
+        Ok(result) => {
+            let status = match result.status {
+                SearchStatus::FailureFound => ObligationStatus::Failed,
+                SearchStatus::NoFailureWithinBound => ObligationStatus::Observed,
+                SearchStatus::SearchIncomplete => ObligationStatus::Unknown,
+            };
+            (
+                status,
+                format!(
+                    "adversarial environment search {:?} after {} evaluation(s)",
+                    result.status, result.evaluated
+                ),
+                serde_json::to_value(result).unwrap_or(serde_json::Value::Null),
+            )
+        }
+        Err(error) => (
+            ObligationStatus::Unknown,
+            format!("adversarial environment search unavailable: {error}"),
+            serde_json::json!({ "error": error }),
+        ),
+    }
+}
+
+fn runtime_or_static_trace(
+    target: &str,
+    explicit_trace: Option<&str>,
+    timeout_ms: u64,
+) -> Result<(CovOpt_Analyzer::trace::Trace, String), String> {
+    if let Some(path) = explicit_trace {
+        return CovOpt_Analyzer::trace::read_trace(path)
+            .map(|trace| (trace, "runtime-trace".to_string()));
+    }
+    let sample = CovOpt_Analyzer::model::SampleKey {
+        seed: Some(0),
+        ..Default::default()
+    };
+    let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
+    match CovOpt_Analyzer::trace::capture_cargo_trace(
+        &workspace,
+        &workspace.join("Cargo.toml"),
+        target,
+        sample.clone(),
+        std::time::Duration::from_millis(timeout_ms.max(1)),
+    ) {
+        Ok(capture) => Ok((capture.trace, "runtime-cargo-trace".to_string())),
+        Err(runtime_error) => {
+            let source = trace_source_for_target(target)?;
+            let function = CovOpt_Analyzer::static_analysis::find_covopt_target_metadata(target)
+                .map(|metadata| metadata.function);
+            CovOpt_Analyzer::trace::static_trace_from_source(source, function.as_deref(), sample)
+                .map(|trace| (trace, format!("static-source-fallback ({runtime_error})")))
+        }
+    }
 }

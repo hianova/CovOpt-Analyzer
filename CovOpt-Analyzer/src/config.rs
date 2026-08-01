@@ -215,8 +215,74 @@ pub struct TargetConfig {
     pub static_only: Option<bool>,
     #[serde(default)]
     pub atomic: Option<AtomicPolicyConfig>,
+    /// Target-owned temporal contracts. Automatic evidence is available only
+    /// when at least one explicit contract is configured.
+    #[serde(default)]
+    pub temporal: Vec<TemporalTargetContract>,
+    /// Target-owned relational contracts and their baselines.
+    #[serde(default)]
+    pub relational: Vec<RelationalTargetContract>,
     #[serde(default, rename = "optimization")]
     pub optimization_override: Option<OptimizationOverride>,
+}
+
+#[derive(Deserialize, Debug, Clone, Serialize)]
+pub struct TemporalTargetContract {
+    pub name: String,
+    pub operator: crate::trace::TemporalOperator,
+    pub event: String,
+    #[serde(default)]
+    pub until_event: Option<String>,
+    pub bound: usize,
+    #[serde(default)]
+    pub fairness_assumption: Option<String>,
+    #[serde(default)]
+    pub trace: Option<String>,
+    #[serde(default = "default_trial_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl TemporalTargetContract {
+    pub fn contract(&self) -> crate::trace::TemporalContract {
+        crate::trace::TemporalContract {
+            name: self.name.clone(),
+            operator: self.operator,
+            event: self.event.clone(),
+            until_event: self.until_event.clone(),
+            bound: self.bound,
+            fairness_assumption: self.fairness_assumption.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Serialize)]
+pub struct RelationalTargetContract {
+    pub name: String,
+    /// Baseline Trace IR JSON or Rust source.
+    pub base: String,
+    #[serde(default)]
+    pub current_trace: Option<String>,
+    #[serde(default)]
+    pub observations: Vec<String>,
+    #[serde(default)]
+    pub secret_inputs: Vec<String>,
+    #[serde(default)]
+    pub ignored_side_effects: Vec<String>,
+    pub bound: usize,
+    #[serde(default = "default_trial_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl RelationalTargetContract {
+    pub fn contract(&self) -> crate::trace::RelationalContract {
+        crate::trace::RelationalContract {
+            name: self.name.clone(),
+            observations: self.observations.clone(),
+            secret_inputs: self.secret_inputs.clone(),
+            ignored_side_effects: self.ignored_side_effects.clone(),
+            bound: self.bound,
+        }
+    }
 }
 
 impl TargetConfig {
@@ -232,6 +298,8 @@ pub struct CovOptConfig {
     pub atomic: AtomicPolicyConfig,
     pub trials: TrialConfig,
     pub optimization: OptimizationConfig,
+    /// Optional autonomous GoalSpec. CLI `--spec` takes precedence.
+    pub converge: Option<crate::converge::GoalSpec>,
     pub macro_path: Option<String>,
     pub providers: ProvidersConfig,
     pub policies: BTreeMap<String, PolicyConfig>,
@@ -254,6 +322,8 @@ struct RawCovOptConfig {
     trials: TrialConfig,
     #[serde(default)]
     optimization: OptimizationConfig,
+    #[serde(default)]
+    converge: Option<crate::converge::GoalSpec>,
     #[serde(default)]
     macro_path: Option<String>,
     #[serde(default)]
@@ -336,6 +406,8 @@ impl<'de> Deserialize<'de> for CovOptConfig {
                     planner: None,
                     static_only: None,
                     atomic: None,
+                    temporal: Vec::new(),
+                    relational: Vec::new(),
                     optimization_override: None,
                 });
             }
@@ -349,6 +421,7 @@ impl<'de> Deserialize<'de> for CovOptConfig {
             atomic: raw.atomic,
             trials: raw.trials,
             optimization: raw.optimization,
+            converge: raw.converge,
             macro_path: raw.macro_path,
             providers: raw.providers,
             policies: raw.policy,
@@ -631,6 +704,25 @@ impl CovOptConfig {
             .map_err(|e| format!("Failed to parse {}: {}", path.as_ref().display(), e))
     }
 
+    /// Load a persisted policy when present, otherwise synthesize the same V3
+    /// defaults used by `covopt init` and discover annotated tests in memory.
+    /// Malformed or unreadable existing files remain hard errors.
+    pub fn load_or_embedded<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        match fs::read_to_string(&path) {
+            Ok(content) => toml::from_str(&content)
+                .map_err(|e| format!("Failed to parse {}: {}", path.as_ref().display(), e)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                toml::from_str(&default_config_source(false))
+                    .map_err(|error| format!("Failed to construct embedded config: {error}"))
+            }
+            Err(error) => Err(format!(
+                "Failed to read config file {}: {}",
+                path.as_ref().display(),
+                error
+            )),
+        }
+    }
+
     pub fn target_id(target: &TargetConfig) -> String {
         target
             .id
@@ -799,6 +891,86 @@ impl CovOptConfig {
             sources,
         }
     }
+}
+
+const DEFAULT_CONFIG_HEADER: &str = r#"version = 3
+
+[assurance]
+mode = "adaptive"
+overall_coverage = 0.90
+critical_coverage = 1.0
+performance_coverage = 0.90
+budget_seconds = 30
+planner = "hybrid"
+fail_on_critical_unknown = true
+
+[providers]
+static = "required"
+mca = "auto"
+coverage = "fallback"
+sanitizer = "fallback"
+concurrency = "fallback"
+profile = "fallback"
+temporal = "auto"
+relational = "auto"
+adversarial = "auto"
+
+[optimization]
+enabled = ["inputs", "atomic", "codegen", "layout"]
+default_budget_seconds = 30
+apply = "never"
+
+[targets]
+discover = "annotations"
+
+[policy.default]
+overall_coverage = 0.90
+critical_coverage = 1.0
+
+[optimization.codegen]
+max_candidates = 32
+
+[optimization.layout]
+max_candidates = 32
+cache_line_bytes = 64
+allow_public_abi_suggestions = false
+
+# Autonomous convergence defaults. This grants workspace apply authority, not
+# git commit/push or external side effects.
+[converge]
+authority = "apply"
+
+[converge.budget]
+wall_time_ms = 30000
+max_iterations = 8
+
+"#;
+
+/// Render the optional persisted configuration. Discovery is authoritative;
+/// explicit target blocks are emitted only for legacy `covopt_test` metadata
+/// that is not represented by the V3 target/evidence annotations.
+pub fn default_config_source(include_placeholder: bool) -> String {
+    let mut source = String::from(DEFAULT_CONFIG_HEADER);
+    let discovered = crate::static_analysis::find_all_covopt_tests();
+    if discovered.is_empty() && include_placeholder {
+        source.push_str(
+            r#"[[target]]
+test = "my_benchmark_test"
+expected = "O(1)"
+n_values = "1,500,10000"
+"#,
+        );
+    } else {
+        for (test, expected, n_values) in discovered {
+            source.push_str(&format!(
+                "[[target]]\ntest = {}\nexpected = {}\nn_values = {}\n\n",
+                serde_json::to_string(&test).unwrap_or_default(),
+                serde_json::to_string(&expected).unwrap_or_default(),
+                serde_json::to_string(&n_values).unwrap_or_default(),
+            ));
+        }
+    }
+    source
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1041,7 +1213,7 @@ pub struct AdviseArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct InitArgs {
-    /// Optional path to initialize in (defaults to current directory)
+    /// Optional project path (defaults to current directory)
     pub path: Option<String>,
 
     /// Skip interactive prompts and accept default values
@@ -1150,6 +1322,9 @@ pub struct FixArgs {
     /// Apply only after repair verification and source-hash checks
     #[arg(long)]
     pub apply: bool,
+    /// Roll back a committed repair transaction manifest
+    #[arg(long, value_name = "MANIFEST")]
+    pub rollback: Option<String>,
     /// Permit unsafe/atomic repairs only when specialized evidence is present
     #[arg(long)]
     pub unsafe_evidence: bool,
@@ -1168,6 +1343,31 @@ pub struct FixArgs {
     /// Compatibility spelling for the legacy magic-number fixer
     #[arg(long)]
     pub legacy_magic: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ConvergeArgs {
+    /// GoalSpec JSON/TOML. Omit to infer objectives and use safe defaults.
+    #[arg(long)]
+    pub spec: Option<String>,
+    /// Rust source path, configured target ID, or annotated test target.
+    #[arg(long)]
+    pub target: Option<String>,
+    /// Replace inferred objectives; repeat for multiple open metric IDs.
+    #[arg(long)]
+    pub objective: Vec<String>,
+    /// Add a required constraint; repeat for multiple open constraint IDs.
+    #[arg(long)]
+    pub constraint: Vec<String>,
+    /// Complete convergence wall-clock budget.
+    #[arg(long)]
+    pub budget: Option<String>,
+    /// Authority boundary: read-only, suggest, or apply (default/turbo).
+    #[arg(long, value_parser = ["read-only", "suggest", "apply"])]
+    pub authority: Option<String>,
+    /// Output format: text or json. The complete bundle is always persisted.
+    #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+    pub format: String,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1264,6 +1464,9 @@ pub struct AdversarialOptimizeArgs {
     pub budget: String,
     #[arg(long, default_value_t = 0)]
     pub seed: u64,
+    /// Per-environment target execution timeout
+    #[arg(long, default_value_t = 5_000)]
+    pub timeout_ms: u64,
     #[arg(long)]
     pub json: bool,
 }
@@ -1343,6 +1546,11 @@ pub struct VerifyTemporalArgs {
     /// Required for eventually/bounded liveness claims.
     #[arg(long)]
     pub fairness: Option<String>,
+    /// Existing runtime Trace IR JSON; otherwise CovOpt requests one from the target test
+    #[arg(long)]
+    pub trace: Option<String>,
+    #[arg(long, default_value_t = 5_000)]
+    pub timeout_ms: u64,
     #[arg(long)]
     pub json: bool,
 }
@@ -1351,13 +1559,18 @@ pub struct VerifyTemporalArgs {
 pub struct VerifyRelationalArgs {
     #[arg(long)]
     pub target: Option<String>,
-    /// Source path for the baseline trace; a checked-out baseline may be supplied by callers.
+    /// Baseline Trace IR JSON or Rust source fallback
     #[arg(long)]
     pub base: Option<String>,
+    /// Existing current runtime Trace IR JSON; otherwise request one from the target test
+    #[arg(long)]
+    pub current_trace: Option<String>,
     #[arg(long, default_value = "operation")]
     pub observations: String,
     #[arg(long, default_value_t = 32)]
     pub bound: usize,
+    #[arg(long, default_value_t = 5_000)]
+    pub timeout_ms: u64,
     #[arg(long)]
     pub json: bool,
 }
@@ -1553,5 +1766,71 @@ policy = "performance"
         let resolved = config.policy_for_target(&config.target[0]).unwrap();
         assert_eq!(resolved.overall_coverage, Some(0.9));
         assert_eq!(resolved.performance_coverage, Some(0.95));
+    }
+
+    #[test]
+    fn parses_target_owned_temporal_and_relational_contracts() {
+        let config: CovOptConfig = toml::from_str(
+            r#"
+version = 3
+[target.worker]
+test = "worker"
+
+[[target.worker.temporal]]
+name = "completes"
+operator = "eventually"
+event = "completed"
+bound = 32
+fairness_assumption = "bounded scheduler"
+
+[[target.worker.relational]]
+name = "preserves-operations"
+base = "baseline.json"
+observations = ["operation"]
+bound = 32
+"#,
+        )
+        .expect("target contracts should parse");
+        let target = &config.target[0];
+        assert_eq!(target.temporal.len(), 1);
+        assert_eq!(target.relational.len(), 1);
+        assert!(target.temporal[0].contract().validate().is_ok());
+        assert_eq!(target.relational[0].contract().bound, 32);
+    }
+
+    #[test]
+    fn missing_config_uses_embedded_policy_but_malformed_config_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(".covopt.toml");
+        let embedded = CovOptConfig::load_or_embedded(&path).unwrap();
+        assert_eq!(embedded.version, 3);
+        assert_eq!(embedded.providers.static_ast, Some(ProviderMode::Required));
+        let converge = embedded.converge.as_ref().unwrap();
+        assert_eq!(converge.authority, crate::converge::Authority::Apply);
+        assert_eq!(converge.budget.wall_time_ms, 30_000);
+
+        std::fs::write(&path, "this is not valid toml = [").unwrap();
+        assert!(CovOptConfig::load_or_embedded(path).is_err());
+    }
+
+    #[test]
+    fn parses_project_owned_converge_goal_defaults() {
+        let config: CovOptConfig = toml::from_str(
+            r#"
+version = 3
+[converge]
+authority = "suggest"
+future_mode = "experimental"
+[converge.budget]
+wall_time_ms = 1234
+max_iterations = 3
+"#,
+        )
+        .unwrap();
+        let goal = config.converge.unwrap();
+        assert_eq!(goal.authority, crate::converge::Authority::Suggest);
+        assert_eq!(goal.budget.wall_time_ms, 1234);
+        assert_eq!(goal.constraints.len(), 3);
+        assert_eq!(goal.extensions["future_mode"], "experimental");
     }
 }

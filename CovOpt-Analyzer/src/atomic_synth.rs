@@ -311,6 +311,26 @@ fn make_patch(
     })
 }
 
+/// Convert a synthesized atomic patch into the shared repair representation so
+/// it can pass through candidate-bound sandbox verification and transactional
+/// apply instead of remaining a display-only diff.
+pub fn patch_source_edits(patch: &AtomicPatch) -> Vec<crate::repair::SourceEdit> {
+    patch
+        .replacements
+        .iter()
+        .map(|replacement| crate::repair::SourceEdit {
+            file: patch.source_path.clone(),
+            start_line: replacement.span.start_line,
+            start_column: replacement.span.start_column,
+            end_line: replacement.span.end_line,
+            end_column: replacement.span.end_column,
+            replacement: replacement.new.clone(),
+            original_text: replacement.old.clone(),
+            source_hash: patch.source_hash.clone(),
+        })
+        .collect()
+}
+
 fn run_mca(request: &AtomicSynthesisRequest) -> Vec<McaEvaluation> {
     let Some(assembly) = &request.mca_assembly else {
         return Vec::new();
@@ -523,5 +543,11 @@ mod tests {
                 .as_ref()
                 .is_none_or(|patch| patch.source_hash == source_hash(source))
         );
+        if let Some(patch) = result.patch {
+            let edits = patch_source_edits(&patch);
+            let updated = crate::repair::apply_edits_safely(source, &edits).unwrap();
+            assert_ne!(updated, source);
+            assert!(syn::parse_file(&updated).is_ok());
+        }
     }
 }

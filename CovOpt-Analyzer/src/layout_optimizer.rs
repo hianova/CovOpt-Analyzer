@@ -2,8 +2,12 @@
 
 use crate::findings::{Finding, FindingKind};
 use crate::repair::{RepairCandidate, RepairCandidateId, RepairKind, RiskLevel};
+use quote::ToTokens;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::path::Path;
+use syn::spanned::Spanned;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -247,10 +251,10 @@ pub fn generate_candidates(
             .map(|index| {
                 (
                     !model.fields[index].hot,
-                    model.fields[index].estimated_size.unwrap_or(usize::MAX),
+                    Reverse(model.fields[index].estimated_alignment.unwrap_or_default()),
                 )
             })
-            .unwrap_or((true, usize::MAX))
+            .unwrap_or((true, Reverse(0)))
     });
     if reordered != original {
         let risk = if abi_blocked {
@@ -268,8 +272,8 @@ pub fn generate_candidates(
             delta: LayoutDelta {
                 size_delta: None,
                 alignment_delta: None,
-                estimated_cache_lines_delta: Some(-1),
-                false_sharing_edges_delta: Some(-1),
+                estimated_cache_lines_delta: None,
+                false_sharing_edges_delta: None,
                 abi_risk: risk,
             },
             repair: RepairCandidate {
@@ -301,7 +305,11 @@ pub fn generate_candidates(
                 verification: Vec::new(),
                 suggestion_only: abi_blocked || model.packed,
                 description: if abi_blocked {
-                    "public ABI layout reorder suggestion; explicit opt-in required".to_string()
+                    "public ABI layout reorder has a materializer but lacks an ABI compatibility evaluator contract"
+                        .to_string()
+                } else if model.packed {
+                    "packed layout reorder has a materializer but lacks an alignment-safety evaluator contract"
+                        .to_string()
                 } else {
                     "field locality and false-sharing reorder candidate".to_string()
                 },
@@ -322,10 +330,10 @@ pub fn generate_candidates(
             kind,
             field_order: original.clone(),
             delta: LayoutDelta {
-                size_delta: Some(config.cache_line_bytes as i64),
-                alignment_delta: Some(config.cache_line_bytes as i64),
-                estimated_cache_lines_delta: Some(1),
-                false_sharing_edges_delta: Some(-1),
+                size_delta: None,
+                alignment_delta: None,
+                estimated_cache_lines_delta: None,
+                false_sharing_edges_delta: None,
                 abi_risk: if model.repr_public_abi {
                     RiskLevel::High
                 } else {
@@ -355,18 +363,98 @@ pub fn generate_candidates(
                     ..Default::default()
                 },
                 verification: Vec::new(),
-                suggestion_only: true,
-                description: "cache-line alignment suggestion; verify object size and ABI"
-                    .to_string(),
+                suggestion_only: model.repr_public_abi || model.packed,
+                description: if model.repr_public_abi {
+                    "cache-line alignment has a materializer but lacks an ABI compatibility evaluator contract"
+                        .to_string()
+                } else if model.packed {
+                    "cache-line alignment has a materializer but lacks an alignment-safety evaluator contract"
+                        .to_string()
+                } else {
+                    "cache-line alignment candidate; verify object size and false-sharing evidence"
+                        .to_string()
+                },
             },
             locked_fields: Vec::new(),
-            safety: "MCA cannot establish cache-miss improvement; profile evidence is required"
+            safety: "MCA cannot establish cache-miss improvement; verify compiled size/alignment and workload contention evidence (profiling is optional)"
                 .to_string(),
         });
     }
     candidates.sort_by(|left, right| left.id.cmp(&right.id));
     candidates.truncate(config.max_candidates.max(1));
     candidates
+}
+
+/// Materialize a layout proposal into a source-hash-bound edit. Suggestions
+/// that cannot be represented without changing unsupported syntax remain
+/// suggestion-only and return `None`.
+pub fn materialize_candidate(
+    source: &str,
+    file: &Path,
+    candidate: &LayoutCandidate,
+    cache_line_bytes: usize,
+) -> Result<Option<crate::repair::SourceEdit>, String> {
+    let syntax = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let item = syntax.items.into_iter().find_map(|item| match item {
+        syn::Item::Struct(item) if item.ident == candidate.struct_name => Some(item),
+        _ => None,
+    });
+    let Some(mut item) = item else {
+        return Err(format!("struct `{}` was not found", candidate.struct_name));
+    };
+    let span = item.span();
+    match candidate.kind {
+        LayoutCandidateKind::FieldReorder => {
+            let syn::Fields::Named(fields) = &mut item.fields else {
+                return Ok(None);
+            };
+            let original = fields.named.iter().cloned().collect::<Vec<_>>();
+            let mut reordered = syn::punctuated::Punctuated::new();
+            for name in &candidate.field_order {
+                let Some(field) = original.iter().find(|field| {
+                    field
+                        .ident
+                        .as_ref()
+                        .is_some_and(|identifier| identifier == name)
+                }) else {
+                    return Err(format!(
+                        "layout candidate references unknown field `{name}`"
+                    ));
+                };
+                reordered.push(field.clone());
+            }
+            if reordered.len() != original.len() {
+                return Err("layout candidate does not preserve every field".to_string());
+            }
+            fields.named = reordered;
+            crate::repair::SourceEdit::from_source(
+                file.display().to_string(),
+                source,
+                span.start().line,
+                span.start().column,
+                span.end().line,
+                span.end().column,
+                item.to_token_stream().to_string(),
+            )
+            .ok_or_else(|| "could not anchor field reorder edit".to_string())
+            .map(Some)
+        }
+        LayoutCandidateKind::CacheLineAlignment => {
+            let insertion = format!("#[repr(align({cache_line_bytes}))]\n");
+            crate::repair::SourceEdit::from_source(
+                file.display().to_string(),
+                source,
+                span.start().line,
+                span.start().column,
+                span.start().line,
+                span.start().column,
+                insertion,
+            )
+            .ok_or_else(|| "could not anchor cache-line alignment edit".to_string())
+            .map(Some)
+        }
+        _ => Ok(None),
+    }
 }
 
 fn atomic_count(model: &LayoutModel) -> usize {
@@ -497,5 +585,29 @@ mod tests {
             best_field_permutation(&model, &HashSet::new()),
             vec!["a", "b"]
         );
+    }
+
+    #[test]
+    fn field_reorder_materializes_as_a_hash_bound_edit() {
+        let source = "struct S { a: u8, b: AtomicUsize }";
+        let model = extract_layout(source, Some("S")).unwrap().pop().unwrap();
+        let finding = Finding::new(
+            "f",
+            FindingKind::PoorFieldLocality,
+            crate::assurance::Severity::High,
+            "x.rs",
+            1,
+            Some("S".to_string()),
+        );
+        let candidate = generate_candidates(&model, &[finding], &LayoutConfig::default())
+            .into_iter()
+            .find(|candidate| matches!(candidate.kind, LayoutCandidateKind::FieldReorder))
+            .unwrap();
+        let edit = materialize_candidate(source, Path::new("x.rs"), &candidate, 64)
+            .unwrap()
+            .unwrap();
+        let updated = crate::repair::apply_edits_safely(source, &[edit]).unwrap();
+        assert!(syn::parse_file(&updated).is_ok());
+        assert!(updated.find("b : AtomicUsize").unwrap() < updated.find("a : u8").unwrap());
     }
 }

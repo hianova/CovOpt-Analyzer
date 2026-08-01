@@ -188,7 +188,7 @@ fn parameter_mode() -> String {
 
 fn confirm_default(input: &ParamInput) -> syn::Result<TokenStream2> {
     let default = &input.default;
-    if parameter_mode() != "confirm" {
+    if !matches!(parameter_mode().as_str(), "confirm" | "robustness") {
         return Ok(quote!(#default));
     }
     if std::env::var_os("COVOPT_CONFIRM_CANDIDATE_HASH").is_none() {
@@ -302,7 +302,9 @@ pub fn covopt_param(input: TokenStream) -> TokenStream {
         Err(error) => return error.to_compile_error().into(),
     };
     let metadata = parameter_metadata(&parsed);
-    if parameter_mode() == "search" && parsed.evaluation.as_deref() != Some("compile_time") {
+    if matches!(parameter_mode().as_str(), "search" | "robustness")
+        && parsed.evaluation.as_deref() != Some("compile_time")
+    {
         let env_name = format!("COVOPT_PARAM_{}", parsed.id.value());
         return quote! {
             {

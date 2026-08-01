@@ -11,6 +11,7 @@ LLVM source-based coverage supplies deterministic source-region execution counts
 - **Complexity fitting**: Uses regression over source-region counts to detect Big-O regressions.
 - **Senior Engineer Advisor**: Detects hot-path heap allocations, Tokio async blocks, and lock contention.
 - **Planner-driven guarantees**: `covopt check` selects only the evidence providers required by policy.
+- **Goal-driven convergence**: `covopt converge` infers/loads an open GoalSpec, verifies exact patches, applies transactionally by default, and rolls back failed post-verification.
 - **Unified parameter search**: One seeded annealed Monte Carlo engine explores all numeric parameter classes; tags describe constraints rather than choosing algorithms.
 - **Explicit evidence strength**: Reports distinguish `Proven`, `Modeled`, `Observed`, `Assumed`, `Unknown`, and `Failed`; bounded/static checks are never silently promoted to proofs.
 - **Git Incremental Audit**: Native support for `--staged` and `--diff main`.
@@ -48,7 +49,8 @@ fn test_process_complexity(n: usize) {
 
 ### 3. Usage Cheat Sheet
 ```bash
-covopt init                         # Setup policy and agent rules
+covopt converge                     # Default turbo loop; workspace-only transactional apply
+covopt init                         # Optional: persist a project policy template
 covopt check --mode adaptive        # Check guarantees via the planner
 covopt inspect --format json        # Explain findings and candidates
 covopt optimize codegen             # Generate optimization candidates
@@ -56,6 +58,10 @@ covopt optimize parameters --target my_bench # Seeded parameter search
 covopt fix --plan                   # Plan a minimal repair set
 covopt verify coverage --target foo # Force a dynamic provider
 ```
+
+`covopt check` does not require initialization: when `.covopt.toml` is absent
+it uses the embedded V3 policy and annotation discovery. Run `covopt init` only
+when the project needs persistent policy overrides.
 
 Legacy commands (`ci`, `audit`, `advise`, `report`, `profile`, `harden`, and
 `fuzz`) remain hidden compatibility aliases for one major version and print a

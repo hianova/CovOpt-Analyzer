@@ -9,9 +9,9 @@ pub mod explore;
 pub mod harden;
 
 use CovOpt_Analyzer::config::{
-    AdviseArgs, AtomicArgs, AuditArgs, CheckArgs, CiArgs, FixArgs, FuzzArgs, HardenArgs, InitArgs,
-    InspectCommandArgs, PlanArgs, ProfileArgs, ReportArgs, RunArgs, SelectTrialsArgs,
-    UnifiedOptimizeArgs, VerifyArgs,
+    AdviseArgs, AtomicArgs, AuditArgs, CheckArgs, CiArgs, ConvergeArgs, FixArgs, FuzzArgs,
+    HardenArgs, InitArgs, InspectCommandArgs, PlanArgs, ProfileArgs, ReportArgs, RunArgs,
+    SelectTrialsArgs, UnifiedOptimizeArgs, VerifyArgs,
 };
 use clap::{Parser, Subcommand};
 
@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "covopt")]
 #[command(author, version, about = "Coverage-based Complexity & Safety Analyzer")]
 #[command(
-    after_help = "EXAMPLES:\n  1. Setup:                covopt init\n  2. Check guarantees:     covopt check --mode adaptive\n  3. Explain findings:     covopt inspect --format json\n  4. Explore candidates:   covopt optimize codegen\n  5. Apply repairs:        covopt fix --plan --apply\n  6. Force evidence:       covopt verify coverage"
+    after_help = "EXAMPLES:\n  1. Autonomous loop:      covopt converge\n  2. Setup:                covopt init\n  3. Check guarantees:     covopt check --mode adaptive\n  4. Explain findings:     covopt inspect --format json\n  5. Explore candidates:   covopt optimize codegen\n  6. Force evidence:       covopt verify coverage"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -31,7 +31,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Initialize a default .covopt.toml and inject AI Agent rules
+    /// Infer or load a GoalSpec, verify exact candidates, and converge safely
+    Converge(ConvergeArgs),
+
+    /// Optionally persist the default project policy as .covopt.toml
     Init(InitArgs),
 
     /// Check obligations and collect planner-selected evidence
@@ -98,9 +101,14 @@ fn main() {
     let cli = Cli::parse_from(args);
 
     match cli.command {
+        Some(Commands::Converge(args)) => {
+            if !commands::run_converge(&args) {
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Init(args)) => {
             if args.hook {
-                commands::install_hook();
+                commands::install_hook(args.path.as_deref());
             } else if args.migrate {
                 commands::migrate_config(args.path.as_deref());
             } else {
@@ -114,7 +122,7 @@ fn main() {
             }
         }
         Some(Commands::Fix(args)) => {
-            if args.plan || args.apply {
+            if args.plan || args.apply || args.rollback.is_some() {
                 if !commands::run_repair_plan(&args) {
                     std::process::exit(1);
                 }
@@ -178,40 +186,43 @@ fn main() {
             }
         }
         Some(Commands::Plan(args)) => {
-            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
-                Ok(config) => config,
-                Err(error) => {
-                    eprintln!("CovOpt plan: failed to load .covopt.toml: {}", error);
-                    std::process::exit(1);
-                }
-            };
+            let config =
+                match CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml") {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!("CovOpt plan: failed to load .covopt.toml: {}", error);
+                        std::process::exit(1);
+                    }
+                };
             if !commands::run_plan(&args, &config) {
                 std::process::exit(1);
             }
         }
         Some(Commands::SelectTrials(args)) => {
-            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
-                Ok(config) => config,
-                Err(error) => {
-                    eprintln!(
-                        "CovOpt select-trials: failed to load .covopt.toml: {}",
-                        error
-                    );
-                    std::process::exit(1);
-                }
-            };
+            let config =
+                match CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml") {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!(
+                            "CovOpt select-trials: failed to load .covopt.toml: {}",
+                            error
+                        );
+                        std::process::exit(1);
+                    }
+                };
             if !commands::run_select_trials(&args, &config) {
                 std::process::exit(1);
             }
         }
         Some(Commands::Atomic(args)) => {
-            let config = match CovOpt_Analyzer::config::CovOptConfig::load(".covopt.toml") {
-                Ok(config) => config,
-                Err(error) => {
-                    eprintln!("CovOpt atomic: failed to load .covopt.toml: {}", error);
-                    std::process::exit(1);
-                }
-            };
+            let config =
+                match CovOpt_Analyzer::config::CovOptConfig::load_or_embedded(".covopt.toml") {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!("CovOpt atomic: failed to load .covopt.toml: {}", error);
+                        std::process::exit(1);
+                    }
+                };
             if !commands::run_atomic(&args, &config) {
                 std::process::exit(1);
             }

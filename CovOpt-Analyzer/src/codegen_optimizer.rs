@@ -88,6 +88,8 @@ pub struct SandboxEvaluation {
     pub workspace: String,
     pub stdout: String,
     pub stderr: String,
+    #[serde(default)]
+    pub baseline_metrics: Option<CodegenMetrics>,
     pub metrics: Option<CodegenMetrics>,
 }
 
@@ -297,12 +299,18 @@ pub fn evaluate_in_sandbox(
     manifest_path: &Path,
     candidate: &CodegenCandidate,
 ) -> Result<SandboxEvaluation, String> {
+    let workspace_root = workspace_root
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
     let source_path = workspace_root.join(&candidate.target);
     let source = fs::read_to_string(&source_path).map_err(|error| error.to_string())?;
+    let baseline_metrics = candidate.function.as_deref().and_then(|function| {
+        measure_codegen_metrics(&workspace_root, function, &candidate.baseline)
+    });
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
-    copy_tree(workspace_root, temp.path())?;
+    copy_tree(&workspace_root, temp.path())?;
     let relative = source_path
-        .strip_prefix(workspace_root)
+        .strip_prefix(&workspace_root)
         .map_err(|error| error.to_string())?;
     let target = temp.path().join(relative);
     let updated = crate::repair::apply_edits_safely(&source, &candidate.repair.changes)?;
@@ -320,16 +328,86 @@ pub fn evaluate_in_sandbox(
         .arg(temp_manifest)
         .output()
         .map_err(|error| error.to_string())?;
+    let metrics = output
+        .status
+        .success()
+        .then(|| {
+            candidate.function.as_deref().and_then(|function| {
+                measure_codegen_metrics(temp.path(), function, &candidate.proposed)
+            })
+        })
+        .flatten();
+    let verification_passed = output.status.success()
+        && !candidate.repair.suggestion_only
+        && baseline_metrics.is_some()
+        && metrics.is_some();
     Ok(SandboxEvaluation {
         candidate_id: candidate.id.clone(),
-        passed: output.status.success() && !candidate.repair.suggestion_only,
+        passed: verification_passed,
         compile_passed: output.status.success(),
-        verification_passed: true,
+        verification_passed,
         source_hash: source_hash(&source),
         workspace: temp.path().display().to_string(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        metrics: None,
+        baseline_metrics,
+        metrics,
+    })
+}
+
+fn measure_codegen_metrics(
+    workspace: &Path,
+    function: &str,
+    settings: &CodegenSettings,
+) -> Option<CodegenMetrics> {
+    let started = std::time::Instant::now();
+    let extractor = crate::asm_extractor::AsmExtractor::new(workspace);
+    let mut environment = Vec::new();
+    if let Some(lto) = settings.lto.as_ref() {
+        environment.push(("CARGO_PROFILE_RELEASE_LTO".to_string(), lto.clone()));
+    }
+    if let Some(units) = settings.codegen_units {
+        environment.push((
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS".to_string(),
+            units.to_string(),
+        ));
+    }
+    if let Some(level) = settings.opt_level.as_ref() {
+        environment.push(("CARGO_PROFILE_RELEASE_OPT_LEVEL".to_string(), level.clone()));
+    }
+    if let Some(cpu) = settings.target_cpu.as_ref() {
+        let inherited = std::env::var("RUSTFLAGS").unwrap_or_default();
+        environment.push((
+            "RUSTFLAGS".to_string(),
+            format!("{} -C target-cpu={cpu}", inherited.trim())
+                .trim()
+                .to_string(),
+        ));
+    }
+    extractor
+        .compile_asm_for_package_with_env(None, &environment)
+        .ok()?;
+    let assembly = extractor.extract_function(function).ok()?;
+    let report = crate::mca::McaRunner::new(settings.target_cpu.clone())
+        .run(&assembly)
+        .ok()?;
+    let unsupported = report.unsupported_instructions;
+    let confidence = if report.instructions == 0 {
+        0.0
+    } else {
+        (1.0 - unsupported as f64 / report.instructions as f64).clamp(0.0, 1.0)
+    };
+    Some(CodegenMetrics {
+        reciprocal_throughput: Some(report.block_rthroughput),
+        ipc: Some(report.ipc),
+        instruction_count: Some(report.instructions),
+        code_size: Some(assembly.len()),
+        loads: Some(report.loads),
+        stores: Some(report.stores),
+        calls: Some(report.calls),
+        compile_time_ms: Some(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
+        unsupported_mca_instructions: Some(unsupported),
+        confidence,
     })
 }
 

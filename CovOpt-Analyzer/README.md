@@ -81,16 +81,24 @@ mod tests {
 
 ### 3. Core Commands Cheat Sheet
 
-CovOpt exposes six primary commands (`init`, `check`, `inspect`, `optimize`, `fix`, and `verify`); older command names remain hidden compatibility aliases.
+CovOpt exposes one autonomous entry point (`converge`) plus six lower-level
+commands (`init`, `check`, `inspect`, `optimize`, `fix`, and `verify`) for
+inspection and debugging; older command names remain hidden compatibility aliases.
 
 ```bash
-# 1. Quick Setup (creates .covopt.toml and injects AI Agent rules)
+# 1. Infer a goal, verify exact candidates, and transactionally converge
+covopt converge
+
+# 2. Preview the same loop without workspace writes
+covopt converge --authority suggest --format json
+
+# 3. Optional policy setup (creates only .covopt.toml)
 covopt init
 
-# 2. Automated Code Repair (Clippy fixes + covopt_param! substitution)
+# 4. Automated Code Repair (Clippy fixes + covopt_param! substitution)
 covopt fix
 
-# 3. Check guarantees using the Evidence Planner
+# 5. Check guarantees using the Evidence Planner
 covopt check --mode adaptive
 
 # 4. Git Incremental Check
@@ -120,6 +128,81 @@ covopt verify relational --target test_process_complexity --base tests/baseline.
 covopt optimize adversarial --target test_process_complexity --budget 30s --seed 7
 ```
 
+### GoalSpec and turbo apply
+
+`covopt converge` defaults to `apply`. It discovers a target, infers objectives
+from current findings, routes semantic/API/ABI risk to stronger evidence, tests
+the exact patch in an isolated workspace, applies through a recoverable
+transaction, and verifies the applied workspace. A post-apply failure triggers
+automatic rollback. It never commits, pushes, or mutates an external service.
+
+GoalSpec is deliberately open: metric, constraint, and evaluator IDs are
+strings with extension fields rather than a closed enum. Built-in IDs get
+default evaluator contracts. An unknown evaluator becomes `unresolved` and
+cannot silently pass. The complete decision, evidence, transaction manifests,
+replay command, rollback command, and proof frontier are written to
+`target/covopt/decision-bundle.json`.
+
+Project defaults may live directly in `.covopt.toml`; an explicit `--spec`
+JSON/TOML file and CLI flags take precedence:
+
+```toml
+[converge]
+authority = "apply" # read-only | suggest | apply
+
+[converge.target]
+selector = "auto"
+
+[converge.budget]
+wall_time_ms = 30000
+max_iterations = 8
+
+[[converge.objectives]]
+id = "codegen-overhead"
+direction = "minimize"
+
+[converge.objectives.metric]
+id = "codegen-overhead"
+```
+
+When `objectives` is omitted, CovOpt infers them. The default required
+constraints are semantic preservation, no new critical safety finding, and no
+evidence-strength regression. `suggestion_only` is reserved for a missing
+materializer/evaluator/contract or reproducibility boundary—not for a high risk
+label by itself.
+
+Initialization is optional. Without `.covopt.toml`, `covopt check` uses the
+embedded V3 policy plus annotation discovery. `init` persists a template only
+when a project needs policy overrides; it does not create agent files or edit
+`Cargo.toml`/`.gitignore`.
+
+For automatic temporal/relational evidence during `covopt check`, declare the
+contract on the target. The target test should emit runtime Trace IR with
+`CovOpt_Analyzer::trace::write_trace_to_requested_path`; a relational baseline
+may be Trace IR JSON or Rust source. Without these declarations the planner
+reports the provider unavailable instead of inventing evidence.
+
+```toml
+[[target]]
+test = "test_process_complexity"
+n_values = "1,32,1024"
+
+[[target.temporal]]
+name = "worker-completes"
+operator = "eventually"
+event = "completed"
+bound = 64
+fairness_assumption = "bounded scheduler fairness"
+timeout_ms = 5000
+
+[[target.relational]]
+name = "operation-preservation"
+base = "tests/traces/process-baseline.json"
+observations = ["operation", "value"]
+bound = 64
+timeout_ms = 5000
+```
+
 ---
 
 ## 🤖 AI Agent & Piping Integration
@@ -143,12 +226,13 @@ covopt check --format sarif
 ## 📖 Recommended Workflows
 
 ### 🧑 For Humans (Interactive Development)
-- **`covopt init --hook`**: Install a fast git pre-commit hook.
+- **`covopt init --hook`**: Install/update a managed `covopt check --staged --fast` pre-commit block.
 - **`covopt check`**: Evaluate guarantees under the configured policy.
 - **`covopt inspect`**: Get findings, evidence, and repair candidates.
 - **`covopt verify runtime`**: Force an optional runtime profiling provider when static/coverage evidence is insufficient.
 
-### 🤖 For AI Coding Agents (Antigravity / Cursor / CI)
+### 🤖 For Automation and Coding Agents
+- **`covopt converge --format json`**: Preferred single-call autonomous loop and DecisionBundle.
 - **`covopt check --format json`**: Structured APIs for automated parsing.
 - **`covopt check --format sarif`**: Produce SARIF for CI annotations.
 - **`covopt inspect --target foo`**: Analyze a target without source edits.

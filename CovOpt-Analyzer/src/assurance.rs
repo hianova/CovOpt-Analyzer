@@ -100,15 +100,15 @@ pub fn provider_status_ceiling(provider: EvidenceProviderKind) -> ObligationStat
     match provider {
         EvidenceProviderKind::StaticAst
         | EvidenceProviderKind::Compiler
-        | EvidenceProviderKind::AtomicModel
-        | EvidenceProviderKind::Temporal
-        | EvidenceProviderKind::Adversarial => ObligationStatus::Modeled,
+        | EvidenceProviderKind::AtomicModel => ObligationStatus::Modeled,
         EvidenceProviderKind::Mca
         | EvidenceProviderKind::Coverage
         | EvidenceProviderKind::Test
         | EvidenceProviderKind::Sanitizer
         | EvidenceProviderKind::Profiler
-        | EvidenceProviderKind::Relational => ObligationStatus::Observed,
+        | EvidenceProviderKind::Relational
+        | EvidenceProviderKind::Temporal
+        | EvidenceProviderKind::Adversarial => ObligationStatus::Observed,
     }
 }
 

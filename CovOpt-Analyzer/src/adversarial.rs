@@ -8,6 +8,8 @@ use crate::assurance::ObligationStatus;
 use crate::model::{AssumptionId, SampleKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -116,6 +118,17 @@ pub struct OracleResult {
     pub summary: String,
     #[serde(default)]
     pub assumptions: Vec<AssumptionId>,
+    #[serde(default)]
+    pub observed_runtime_ms: Option<u64>,
+    #[serde(default)]
+    pub replay: Option<ReplayRecipe>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayRecipe {
+    pub command: Vec<String>,
+    pub environment: BTreeMap<String, String>,
+    pub working_directory: String,
 }
 
 pub trait AdversarialOracle {
@@ -124,6 +137,186 @@ pub trait AdversarialOracle {
         sample: &EnvironmentSample,
         objective: AdversarialObjective,
     ) -> OracleResult;
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeObservation {
+    success: bool,
+    timed_out: bool,
+    elapsed_ms: u64,
+    stdout: String,
+    stderr: String,
+    replay: ReplayRecipe,
+}
+
+/// Executes each unique environment against a real Cargo test target and
+/// caches the observation across objectives. Environment variables form the
+/// replay contract used by CovOpt test macros and target-owned harnesses.
+pub struct CargoAdversarialOracle {
+    workspace: PathBuf,
+    manifest_path: PathBuf,
+    target: String,
+    timeout: Duration,
+    unknown_obligations: usize,
+    observations: HashMap<String, RuntimeObservation>,
+}
+
+impl CargoAdversarialOracle {
+    pub fn new(
+        workspace: impl Into<PathBuf>,
+        manifest_path: impl Into<PathBuf>,
+        target: impl Into<String>,
+        timeout: Duration,
+        unknown_obligations: usize,
+    ) -> Self {
+        Self {
+            workspace: workspace.into(),
+            manifest_path: manifest_path.into(),
+            target: target.into(),
+            timeout,
+            unknown_obligations,
+            observations: HashMap::new(),
+        }
+    }
+
+    fn environment(sample: &EnvironmentSample) -> BTreeMap<String, String> {
+        let mut environment = BTreeMap::new();
+        for (name, value) in &sample.values {
+            environment.insert(
+                format!("COVOPT_ENV_{}", name.to_ascii_uppercase()),
+                value.clone(),
+            );
+        }
+        if let Some(value) = sample.values.get("n") {
+            environment.insert("COVOPT_N".to_string(), value.clone());
+        }
+        if let Some(value) = sample.values.get("seed") {
+            environment.insert("COVOPT_FUZZ_SEED".to_string(), value.clone());
+        }
+        if let Some(value) = sample.values.get("threads") {
+            environment.insert("COVOPT_THREADS".to_string(), value.clone());
+        }
+        if let Some(value) = sample.values.get("queue_capacity") {
+            environment.insert("COVOPT_QUEUE_CAPACITY".to_string(), value.clone());
+        }
+        environment
+    }
+
+    fn observe(&mut self, sample: &EnvironmentSample) -> RuntimeObservation {
+        let fingerprint = sample.values_to_fingerprint();
+        if let Some(observation) = self.observations.get(&fingerprint) {
+            return observation.clone();
+        }
+        let environment = Self::environment(sample);
+        let command_line = vec![
+            "cargo".to_string(),
+            "test".to_string(),
+            self.target.clone(),
+            "--manifest-path".to_string(),
+            self.manifest_path.display().to_string(),
+            "--".to_string(),
+            "--nocapture".to_string(),
+        ];
+        let replay = ReplayRecipe {
+            command: command_line.clone(),
+            environment: environment.clone(),
+            working_directory: self.workspace.display().to_string(),
+        };
+        let mut command = Command::new("cargo");
+        command
+            .arg("test")
+            .arg(&self.target)
+            .arg("--manifest-path")
+            .arg(&self.manifest_path)
+            .args(["--", "--nocapture"])
+            .current_dir(&self.workspace)
+            .envs(&environment);
+        let started = Instant::now();
+        let observation = match crate::runner::command_output_with_timeout(
+            &mut command,
+            "adversarial target",
+            self.timeout,
+        ) {
+            Ok(output) => RuntimeObservation {
+                success: output.status.success(),
+                timed_out: false,
+                elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                replay,
+            },
+            Err(error) => RuntimeObservation {
+                success: false,
+                timed_out: error.contains("timed out"),
+                elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                stdout: String::new(),
+                stderr: error,
+                replay,
+            },
+        };
+        self.observations.insert(fingerprint, observation.clone());
+        observation
+    }
+}
+
+impl AdversarialOracle for CargoAdversarialOracle {
+    fn evaluate(
+        &mut self,
+        sample: &EnvironmentSample,
+        objective: AdversarialObjective,
+    ) -> OracleResult {
+        let observation = self.observe(sample);
+        let threads = sample.sample.threads.unwrap_or(1) as f64;
+        let n = sample.sample.n.unwrap_or(1).max(1) as f64;
+        let runtime = observation.elapsed_ms as f64;
+        let score = match objective {
+            AdversarialObjective::ComplexityDeviation => runtime / n,
+            AdversarialObjective::RuntimeRegression => runtime,
+            AdversarialObjective::Contention => runtime * threads,
+            AdversarialObjective::UnknownObligations => self.unknown_obligations as f64,
+            AdversarialObjective::TemporalViolationProbability
+            | AdversarialObjective::RelationalDivergence => {
+                if observation.success {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            AdversarialObjective::UncoveredScope => self.unknown_obligations as f64,
+        };
+        let output_tail = |value: &str| {
+            let mut lines = value.lines().rev().take(8).collect::<Vec<_>>();
+            lines.reverse();
+            lines.join("\n")
+        };
+        OracleResult {
+            status: ObligationStatus::Observed,
+            failed: !observation.success,
+            score,
+            summary: if observation.success {
+                format!(
+                    "target executed successfully in {}ms under {:?}",
+                    observation.elapsed_ms, sample.values
+                )
+            } else {
+                format!(
+                    "target {} after {}ms under {:?}; stdout tail: {}; stderr tail: {}",
+                    if observation.timed_out {
+                        "timed out"
+                    } else {
+                        "failed"
+                    },
+                    observation.elapsed_ms,
+                    sample.values,
+                    output_tail(&observation.stdout),
+                    output_tail(&observation.stderr)
+                )
+            },
+            assumptions: Vec::new(),
+            observed_runtime_ms: Some(observation.elapsed_ms),
+            replay: Some(observation.replay),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -332,6 +525,8 @@ mod tests {
                 score: threads as f64,
                 summary: "test oracle".to_string(),
                 assumptions: Vec::new(),
+                observed_runtime_ms: None,
+                replay: None,
             }
         }
     }
