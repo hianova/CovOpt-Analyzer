@@ -1,0 +1,230 @@
+use covopt_macro::covopt_param;
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
+pub enum Complexity {
+    O1,
+    OLogN,
+    ON,
+    ONLogN,
+    ON2,
+    O2N,
+    OSqrtN,
+}
+
+impl Complexity {
+    /// Convert N into its theoretical mathematical value f(N).
+    pub fn to_fn_value(&self, n: usize) -> f64 {
+        let n = n as f64;
+        match self {
+            Complexity::O1 => 1.0,
+            Complexity::OLogN => n.log2().max(1.0), // Prevent log(0) issues, though N shouldn't be 0
+            Complexity::ON => n,
+            Complexity::ONLogN => n * n.log2().max(1.0),
+            Complexity::ON2 => n * n,
+            Complexity::O2N => {
+                // To prevent f64 infinity, we might cap N if it's too large, or just use 2.0_f64.powf.
+                if n > covopt_param!("M_24_23", 1023.0) {
+                    f64::MAX
+                } else {
+                    (covopt_param!("M_27_20", 2.0_f64)).powf(n)
+                }
+            }
+            Complexity::OSqrtN => n.sqrt(),
+        }
+    }
+
+    /// List all complexities for comparison.
+    pub fn all() -> &'static [Complexity] {
+        &[
+            Complexity::O1,
+            Complexity::OLogN,
+            Complexity::ON,
+            Complexity::ONLogN,
+            Complexity::ON2,
+            Complexity::O2N,
+            Complexity::OSqrtN,
+        ]
+    }
+}
+
+#[derive(Debug)]
+pub struct AnalysisReport {
+    pub is_converged: bool,
+    pub expected: Complexity,
+    pub r_squared: f64,
+    pub actual_trend: Complexity,
+    pub coefficient: f64,
+}
+
+pub struct ConvergenceAnalyzer;
+
+impl ConvergenceAnalyzer {
+    /// Calculate R-squared and the coefficient 'c' (slope) for a given complexity model.
+    /// Returns (r_squared, coefficient).
+    pub fn calculate_r_squared(data: &[(usize, u64)], complexity: Complexity) -> (f64, f64) {
+        if data.is_empty() {
+            return (0.0, 0.0);
+        }
+
+        let n = data.len() as f64;
+        let mut x_values = Vec::with_capacity(data.len());
+        let mut y_values = Vec::with_capacity(data.len());
+
+        for &(size, hit_count) in data {
+            x_values.push(complexity.to_fn_value(size));
+            y_values.push(hit_count as f64);
+        }
+
+        let sum_x: f64 = x_values.iter().sum();
+        let sum_y: f64 = y_values.iter().sum();
+
+        let mean_x = sum_x / n;
+        let mean_y = sum_y / n;
+
+        let mut sum_xy_diff = 0.0;
+        let mut sum_xx_diff = 0.0;
+
+        for i in 0..data.len() {
+            let x_diff = x_values[i] - mean_x;
+            let y_diff = y_values[i] - mean_y;
+            sum_xy_diff += x_diff * y_diff;
+            sum_xx_diff += x_diff * x_diff;
+        }
+
+        let c = if sum_xx_diff.abs() < covopt_param!("M_92_39", 1e-9) {
+            0.0
+        } else {
+            sum_xy_diff / sum_xx_diff
+        };
+
+        let b = mean_y - c * mean_x;
+
+        let mut ss_tot = 0.0;
+        let mut ss_res = 0.0;
+
+        for i in 0..data.len() {
+            let y = y_values[i];
+            let predicted_y = c * x_values[i] + b;
+            ss_tot += (y - mean_y).powi(2);
+            ss_res += (y - predicted_y).powi(2);
+        }
+
+        if ss_tot.abs() < covopt_param!("M_110_26", 1e-9) {
+            if complexity == Complexity::O1 {
+                return (1.0, c);
+            } else {
+                return (0.0, c);
+            }
+        }
+
+        let r2 = 1.0 - (ss_res / ss_tot);
+        (r2, c)
+    }
+
+    pub fn analyze(data: &[(usize, u64)], expected: Complexity) -> AnalysisReport {
+        let (expected_r2, _) = Self::calculate_r_squared(data, expected);
+
+        let mut best_complexity = expected;
+        let mut max_r2 = expected_r2;
+        let mut best_c = 0.0;
+
+        for &comp in Complexity::all() {
+            let (r2, c) = Self::calculate_r_squared(data, comp);
+            if r2 > max_r2 + covopt_param!("M_132_25", 0.001) {
+                max_r2 = r2;
+                best_complexity = comp;
+                best_c = c;
+            } else if (r2 - expected_r2).abs() < covopt_param!("M_137_44", 0.001)
+                && comp == expected
+            {
+                best_c = c;
+            }
+        }
+
+        let is_converged = expected_r2 >= covopt_param!("M_140_42", 0.95);
+
+        AnalysisReport {
+            is_converged,
+            expected,
+            r_squared: expected_r2,
+            actual_trend: best_complexity,
+            coefficient: best_c,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::assert_matches;
+
+    #[test]
+    fn test_perfect_ologn_convergence() {
+        // N values: 10, 100, 1000
+        // Let's assume H(N) = 2 * log2(N) + 5
+        let data = vec![(10, 11), (100, 18), (1000, 25)];
+
+        let report = ConvergenceAnalyzer::analyze(&data, Complexity::OLogN);
+
+        assert!(report.is_converged, "Should converge to O(logN)");
+        assert_matches!(report.expected, Complexity::OLogN);
+        assert_matches!(report.actual_trend, Complexity::OLogN);
+        assert!(report.r_squared > 0.95);
+    }
+
+    #[test]
+    fn test_divergence_to_on() {
+        // Expected O(logN), but actual is O(N)
+        let data = vec![(10, 10), (100, 100), (1000, 1000)];
+
+        let report = ConvergenceAnalyzer::analyze(&data, Complexity::OLogN);
+
+        assert!(!report.is_converged, "Should not converge to O(logN)");
+        assert_matches!(report.expected, Complexity::OLogN);
+        assert_matches!(report.actual_trend, Complexity::ON);
+        assert!(report.r_squared < 0.95);
+    }
+
+    #[test]
+    fn test_perfect_o1_convergence() {
+        // H(N) = 42 constant
+        let data = vec![(10, 42), (100, 42), (1000, 42)];
+
+        let report = ConvergenceAnalyzer::analyze(&data, Complexity::O1);
+
+        assert!(report.is_converged, "Should converge to O(1)");
+        assert_eq!(report.actual_trend, Complexity::O1);
+        assert_eq!(report.r_squared, 1.0);
+    }
+
+    #[test]
+    fn test_empty_data() {
+        let data = vec![];
+        let (r2, _) = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
+        assert_eq!(r2, 0.0);
+    }
+
+    #[test]
+    fn test_flat_non_o1() {
+        let data = vec![(10, 42), (100, 42), (1000, 42)];
+        let (r2, _) = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
+        assert_eq!(r2, 0.0); // Explained variance is 0% because true variance is 0
+    }
+
+    #[test]
+    fn test_calculate_r_squared_complexity() {
+        // Read N from environment variable for CovOpt
+        let n: usize = std::env::var("COVOPT_N")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .unwrap_or(covopt_param!("M_216_23", 100));
+
+        // Generate N data points
+        let mut data = Vec::with_capacity(n);
+        for i in 0..n {
+            data.push((i, i as u64));
+        }
+
+        // Run the function we want to measure
+        let _r2 = ConvergenceAnalyzer::calculate_r_squared(&data, Complexity::ON);
+    }
+}

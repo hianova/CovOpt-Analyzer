@@ -1,5 +1,5 @@
 [workspace]
-members = ["covopt-schema", "covopt-macro", "CovOpt-Analyzer"]
+members = ["covopt-schema", "covopt-macro", "CovOpt-Analyzer", "covopt_3.0_contest"]
 resolver = "2"
 
 [profile.dev]

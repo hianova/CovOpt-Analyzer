@@ -1,0 +1,357 @@
+use crate::config::TargetConfig;
+use crate::runner::{AuditContext, CargoTestRunner};
+use covopt_macro::covopt_param;
+use std::fmt::Write;
+use std::process::Command;
+
+pub struct EntropyResult {
+    pub fuzz_variance_score: f64, // 0 - 30
+    pub branch_sprawl_score: f64, // 0 - 40
+    pub cli_noise_score: f64,     // 0 - 30
+    pub total_score: f64,         // 0 - 100
+}
+
+pub fn calculate_entropy_score(
+    config: &TargetConfig,
+    compact: bool,
+    fast: bool,
+    audit_context: Option<&AuditContext>,
+    cli_noise_result: Option<(usize, f64)>,
+) -> EntropyResult {
+    let mut details = String::new();
+    let _ = writeln!(details, "\n[Entropy Analyzer] Starting Evaluation...");
+    let cli_noise = compute_cli_noise(&mut details, cli_noise_result);
+    let fuzz_variance = if fast {
+        let _ = writeln!(details, "  -> Fuzz-Cov Variance: skipped (--fast mode)");
+        0.0
+    } else {
+        compute_fuzz_variance(config, &mut details, audit_context)
+    };
+    let branch_sprawl = if fast {
+        let _ = writeln!(details, "  -> API Branch Sprawl: skipped (--fast mode)");
+        0.0
+    } else {
+        compute_branch_sprawl(config, &mut details, audit_context)
+    };
+
+    let total = fuzz_variance + branch_sprawl + cli_noise;
+
+    if !compact || total > covopt_param!("M_22_27", 50.0) {
+        print!("{}", details);
+    }
+
+    EntropyResult {
+        fuzz_variance_score: fuzz_variance,
+        branch_sprawl_score: branch_sprawl,
+        cli_noise_score: cli_noise,
+        total_score: total,
+    }
+}
+
+fn is_ignored_path(file_name: &str) -> bool {
+    let path = std::path::Path::new(file_name);
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s == "tests" || s == "examples"
+    })
+}
+
+fn is_diagnostic_ignored(msg: &serde_json::Value) -> bool {
+    if let Some(spans) = msg.get("spans").and_then(|s| s.as_array()) {
+        if spans.is_empty() {
+            return false;
+        }
+        let primary_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| {
+                s.get("is_primary")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !primary_spans.is_empty() {
+            primary_spans.iter().any(|s| {
+                s.get("file_name")
+                    .and_then(|f| f.as_str())
+                    .is_some_and(is_ignored_path)
+            })
+        } else {
+            spans.iter().any(|s| {
+                s.get("file_name")
+                    .and_then(|f| f.as_str())
+                    .is_some_and(is_ignored_path)
+            })
+        }
+    } else {
+        false
+    }
+}
+
+pub fn parse_cli_noise_from_json(stdout: &str) -> (usize, f64) {
+    let mut warning_count = 0;
+
+    for line in stdout.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(msg) = v.get("message")
+            && let Some(level) = msg.get("level").and_then(|l| l.as_str())
+        {
+            if is_diagnostic_ignored(msg) {
+                continue;
+            }
+
+            if level == "warning" {
+                warning_count += 1;
+            } else if level == "error" || level == "error: internal compiler error" {
+                warning_count += covopt_param!("M_52_33", 5);
+            }
+        }
+    }
+
+    let score =
+        (warning_count as f64 * covopt_param!("M_58_40", 2.0)).min(covopt_param!("M_58_49", 30.0));
+    (warning_count, score)
+}
+
+fn compute_cli_noise(details: &mut String, cached_result: Option<(usize, f64)>) -> f64 {
+    let _ = writeln!(details, "  -> Calculating CLI Noise Index (C)...");
+    let (warning_count, score) = if let Some(result) = cached_result {
+        result
+    } else if let Ok(output) = Command::new("cargo")
+        .args([
+            "check",
+            "--workspace",
+            "--all-targets",
+            "--message-format=json",
+        ])
+        .output()
+    {
+        parse_cli_noise_from_json(&String::from_utf8_lossy(&output.stdout))
+    } else {
+        (0, 0.0)
+    };
+
+    let _ = writeln!(
+        details,
+        "     Found {} warnings. CLI Noise Score: {:.1}/30.0",
+        warning_count, score
+    );
+    score
+}
+
+fn compute_fuzz_variance(
+    config: &TargetConfig,
+    details: &mut String,
+    audit_context: Option<&AuditContext>,
+) -> f64 {
+    let _ = writeln!(details, "  -> Calculating Fuzz-Cov Variance (A)...");
+    let iterations = config
+        .fuzz_iterations
+        .unwrap_or(covopt_param!("M_69_54", 10));
+    let n_value = covopt_param!("M_70_18", 100); // Use a fixed N for fuzzing loops
+
+    let local_context;
+    let context = if let Some(context) = audit_context {
+        context
+    } else {
+        let mut packages_to_compile = Vec::new();
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+            &config.test,
+            config.package.as_ref(),
+        ) {
+            packages_to_compile.push(pkg);
+        }
+        local_context = match AuditContext::compile(&packages_to_compile) {
+            Ok(context) => context,
+            Err(_) => return covopt_param!("M_107_15", 15.0),
+        };
+        &local_context
+    };
+
+    let hit_counts: Vec<f64> = (0..iterations)
+        .into_iter()
+        .filter_map(|i| {
+            let seed = i as u64 * covopt_param!("M_85_34", 1337) + covopt_param!("M_85_41", 1000);
+            let iter_dir = tempfile::tempdir().expect("Failed to create tempdir");
+            let local_runner = crate::runner::CargoTestRunner::from_compiled(
+                &config.test,
+                iter_dir.path(),
+                &context.workspace_tests,
+            );
+
+            if let Ok((map, _)) = local_runner.run(n_value, Some(seed))
+                && let Some((_, _, _, hits)) =
+                    map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]), None)
+            {
+                Some(hits as f64)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if hit_counts.is_empty() {
+        let msg = if crate::config::should_color() {
+            "     \x1b[31m[WARN] Failed to gather Fuzz-Cov data. (Did your test panic or lack loops?) Defaulting to 15.0 penalty.\x1b[0m"
+        } else {
+            "     [WARN] Failed to gather Fuzz-Cov data. (Did your test panic or lack loops?) Defaulting to 15.0 penalty."
+        };
+        let _ = writeln!(details, "{}", msg);
+        return covopt_param!("M_107_15", 15.0);
+    }
+
+    let mean = hit_counts.iter().sum::<f64>() / hit_counts.len() as f64;
+    let variance = hit_counts
+        .iter()
+        .map(|value| {
+            let diff = mean - *value;
+            diff * diff
+        })
+        .sum::<f64>()
+        / hit_counts.len() as f64;
+
+    let std_dev = variance.sqrt();
+    let cv = if mean > 0.0 { std_dev / mean } else { 0.0 }; // Coefficient of variation
+
+    // CV > 0.5 means highly unstable -> score 30
+    let score = (cv * covopt_param!("M_124_22", 60.0)).min(covopt_param!("M_124_32", 30.0));
+    let _ = writeln!(
+        details,
+        "     Fuzz Variance (StdDev: {:.1}, Mean: {:.1}, CV: {:.2}). Score: {:.1}/30.0",
+        std_dev, mean, cv, score
+    );
+    score
+}
+
+fn compute_branch_sprawl(
+    config: &TargetConfig,
+    details: &mut String,
+    audit_context: Option<&AuditContext>,
+) -> f64 {
+    let _ = writeln!(details, "  -> Calculating API Branch Sprawl (B)...");
+
+    let tests_str = match &config.tests {
+        Some(t) => t,
+        None => {
+            let _ = writeln!(
+                details,
+                "     No `tests` field provided for multi-scenario. Defaulting to 0 branch sprawl."
+            );
+            return 0.0;
+        }
+    };
+
+    let test_cases: Vec<&str> = tests_str.split(',').map(|s| s.trim()).collect();
+    if test_cases.len() < 2 {
+        let _ = writeln!(
+            details,
+            "     Need at least 2 tests to measure branch sprawl. Defaulting to 0."
+        );
+        return 0.0;
+    }
+
+    let mut covered_lines_per_test: Vec<std::collections::HashSet<u64>> = Vec::new();
+    let local_context;
+    let context = if let Some(context) = audit_context {
+        context
+    } else {
+        let mut packages_to_compile = Vec::new();
+        if let Some(pkg) = crate::static_analysis::resolve_package_for_target(
+            &config.test,
+            config.package.as_ref(),
+        ) {
+            packages_to_compile.push(pkg);
+        }
+        local_context = match AuditContext::compile(&packages_to_compile) {
+            Ok(context) => context,
+            Err(_) => return covopt_param!("M_188_15", 20.0),
+        };
+        &local_context
+    };
+
+    for tc in &test_cases {
+        let runner =
+            CargoTestRunner::from_compiled(tc, context.output_dir.path(), &context.workspace_tests);
+        if let Ok((map, _)) = runner.run(covopt_param!("M_170_41", 100), None) {
+            let mut lines = std::collections::HashSet::new();
+            if let Some((target_file, _, _, _)) =
+                map.find_peak_location(config.ignore.as_deref().unwrap_or(&[]), None)
+            {
+                for (file, file_cov) in &map.hit_counts {
+                    if file == &target_file {
+                        for (&line_number, &count) in file_cov {
+                            if count > 0 {
+                                lines.insert(line_number);
+                            }
+                        }
+                    }
+                }
+            }
+            covered_lines_per_test.push(lines);
+        }
+    }
+
+    if covered_lines_per_test.len() < 2 {
+        return covopt_param!("M_188_15", 20.0); // Fail safe
+    }
+
+    let mut intersection = covered_lines_per_test[0].clone();
+    let mut union = covered_lines_per_test[0].clone();
+
+    for lines in covered_lines_per_test.iter().skip(1) {
+        intersection.retain(|x| lines.contains(x));
+        union.extend(lines);
+    }
+
+    let intersection_count = intersection.len() as f64;
+    let union_count = union.len() as f64;
+
+    let ratio = if union_count > 0.0 {
+        intersection_count / union_count
+    } else {
+        1.0
+    };
+    // ratio 1.0 -> score 0. ratio 0.0 -> score 40.
+    let score = (1.0 - ratio) * covopt_param!("M_208_32", 40.0);
+    let _ = writeln!(
+        details,
+        "     Branch Sprawl (Intersection: {}, Union: {}, Ratio: {:.2}). Score: {:.1}/40.0",
+        intersection_count, union_count, ratio, score
+    );
+    score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cli_noise_filters_tests_and_examples() {
+        let json_data = r#"{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"tests/integration_test.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"examples/demo.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"src/lib.rs","is_primary":true}]}}"#;
+
+        let (count, score) = parse_cli_noise_from_json(json_data);
+        assert_eq!(count, 1, "Only warning in src/lib.rs should be counted");
+        assert!(
+            (score - 2.0).abs() < f64::EPSILON,
+            "Score should be 2.0 for 1 warning"
+        );
+    }
+
+    #[test]
+    fn test_parse_cli_noise_all_ignored_yields_zero() {
+        let json_data = r#"{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"tests/foo.rs","is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","spans":[{"file_name":"examples/bar.rs","is_primary":true}]}}"#;
+
+        let (count, score) = parse_cli_noise_from_json(json_data);
+        assert_eq!(
+            count, 0,
+            "Warnings in tests/ and examples/ should be excluded"
+        );
+        assert!(
+            (score - 0.0).abs() < f64::EPSILON,
+            "Score should be 0.0 when all diagnostics are ignored"
+        );
+    }
+}

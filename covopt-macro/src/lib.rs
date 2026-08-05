@@ -848,3 +848,55 @@ pub fn covopt_bench(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+/// Declares an evolution target for CovOpt 3.0.
+/// 
+/// Intercepts a trait or struct and defines the physical survival boundaries (Chaos DSL).
+/// When `covopt evolve` scans this macro, it hands the metadata and structural constraints
+/// over to the Core Evolutionary Engine for topological searching (Phase 1~4).
+#[proc_macro_attribute]
+pub fn covopt_evolve(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_item = match syn::parse::<syn::Item>(item.clone()) {
+        Ok(value) => value,
+        Err(error) => return error.to_compile_error().into(),
+    };
+
+    let (item_ident, vis) = match &input_item {
+        syn::Item::Struct(s) => (&s.ident, &s.vis),
+        syn::Item::Trait(t) => (&t.ident, &t.vis),
+        syn::Item::Fn(f) => (&f.sig.ident, &f.vis),
+        syn::Item::Enum(e) => (&e.ident, &e.vis),
+        _ => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[covopt_evolve] can only be applied to a struct, trait, enum, or function",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let mut values = match parse_string_metadata(
+        attr,
+        "covopt_evolve",
+        &["bounds", "fuzzer", "target"],
+    ) {
+        Ok(value) => value,
+        Err(error) => return error.to_compile_error().into(),
+    };
+
+    values
+        .entry("target".to_string())
+        .or_insert_with(|| item_ident.to_string());
+
+    let (metadata_name, metadata) = metadata_const(item_ident, "evolve", &values);
+    let orig_item: TokenStream2 = item.into();
+
+    quote! { 
+        #orig_item 
+        
+        #[doc(hidden)] 
+        #[allow(dead_code, non_upper_case_globals)] 
+        #vis const #metadata_name: &str = #metadata; 
+    }.into()
+}

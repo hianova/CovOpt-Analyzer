@@ -1,0 +1,1818 @@
+use covopt_schema::ParameterDescriptor;
+use quote::ToTokens;
+use std::fs;
+use std::path::{Path, PathBuf};
+use syn::parse::Parser;
+use syn::spanned::Spanned;
+use syn::visit::Visit;
+
+#[derive(Debug, Default)]
+pub struct MemoryProfile {
+    pub loads: usize,
+    pub stores: usize,
+    pub allocs: usize,
+}
+
+pub fn analyze_memory_ops(asm_block: &str) -> MemoryProfile {
+    let mut profile = MemoryProfile::default();
+
+    for line in asm_block.lines() {
+        let l = line.to_lowercase();
+        // Simple heuristic for memory ops in assembly
+        // ARM uses ldr/str, x86 uses mov with brackets
+
+        if (l.contains("call") || l.contains("bl "))
+            && (l.contains("alloc")
+                || l.contains("malloc")
+                || l.contains("push")
+                || l.contains("reserve"))
+        {
+            profile.allocs += 1;
+        }
+
+        if l.contains("ldr ") || l.contains("ldp ") || l.contains("mov") {
+            // If it's x86 mov, look for memory brackets []
+            // Dest is usually before comma, Source is after comma in Intel syntax,
+            // but objdump often outputs AT&T syntax.
+            // A simple heuristic: if it contains `mov` and `(`, it's a memory access in AT&T syntax.
+            if l.contains("ldr ") || l.contains("ldp ") || (l.contains("mov") && l.contains("(")) {
+                // We'll just count as load for now if we can't easily distinguish AT&T src/dest.
+                // Let's refine:
+                // AT&T: mov src, dest. Memory is like (%rax).
+                if l.contains("mov") {
+                    let parts: Vec<&str> = l.split(',').collect();
+                    if parts.len() == 2 {
+                        if parts[0].contains("(") {
+                            profile.loads += 1;
+                        } else if parts[1].contains("(") {
+                            profile.stores += 1;
+                        }
+                    } else {
+                        profile.loads += 1;
+                    }
+                } else {
+                    profile.loads += 1; // ARM ldr
+                }
+            }
+        }
+
+        if l.contains("str ") || l.contains("stp ") {
+            profile.stores += 1;
+        }
+    }
+
+    profile
+}
+
+struct VariableVisitor {
+    count: usize,
+}
+
+impl<'ast> Visit<'ast> for VariableVisitor {
+    fn visit_local(&mut self, i: &'ast syn::Local) {
+        self.count += 1;
+        syn::visit::visit_local(self, i);
+    }
+    fn visit_item_const(&mut self, i: &'ast syn::ItemConst) {
+        self.count += 1;
+        syn::visit::visit_item_const(self, i);
+    }
+    fn visit_item_static(&mut self, i: &'ast syn::ItemStatic) {
+        self.count += 1;
+        syn::visit::visit_item_static(self, i);
+    }
+}
+
+struct TargetFnVisitor<'ast> {
+    target_line: usize,
+    found_item_fn: Option<&'ast syn::ItemFn>,
+    found_impl_fn: Option<&'ast syn::ImplItemFn>,
+}
+
+impl<'ast> Visit<'ast> for TargetFnVisitor<'ast> {
+    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
+        let start = i.span().start().line;
+        let end = i.span().end().line;
+        if self.target_line >= start && self.target_line <= end {
+            self.found_item_fn = Some(i);
+        }
+        syn::visit::visit_item_fn(self, i);
+    }
+    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
+        let start = i.span().start().line;
+        let end = i.span().end().line;
+        if self.target_line >= start && self.target_line <= end {
+            self.found_impl_fn = Some(i);
+        }
+        syn::visit::visit_impl_item_fn(self, i);
+    }
+}
+
+pub fn analyze_variables(source_file: &Path, target_line: usize) -> usize {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return 0;
+    };
+
+    if let Ok(file_ast) = syn::parse_file(&content) {
+        let mut fn_visitor = TargetFnVisitor {
+            target_line,
+            found_item_fn: None,
+            found_impl_fn: None,
+        };
+        fn_visitor.visit_file(&file_ast);
+
+        let mut var_visitor = VariableVisitor { count: 0 };
+        if let Some(f) = fn_visitor.found_item_fn {
+            var_visitor.visit_item_fn(f);
+            return var_visitor.count;
+        } else if let Some(f) = fn_visitor.found_impl_fn {
+            var_visitor.visit_impl_item_fn(f);
+            return var_visitor.count;
+        }
+
+        var_visitor.visit_file(&file_ast);
+        return var_visitor.count;
+    }
+
+    let mut count = 0;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("let ") || line.contains(" let ") {
+            count += 1;
+        }
+    }
+    count
+}
+
+struct ThreadActivityVisitor {
+    spawned_vars: Vec<String>,
+    joined_vars: Vec<String>,
+    spawn_count: usize,
+    inline_join_count: usize,
+    has_spawn: bool,
+    has_join: bool,
+    has_mutex: bool,
+    has_rwlock: bool,
+    has_atomic: bool,
+    has_mpsc: bool,
+    has_arc: bool,
+}
+
+impl<'ast> Visit<'ast> for ThreadActivityVisitor {
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        if let Some(init) = &node.init {
+            let is_spawn = match &*init.expr {
+                syn::Expr::Call(call)
+                    if let syn::Expr::Path(expr_path) = &*call.func
+                        && expr_path
+                            .path
+                            .segments
+                            .last()
+                            .is_some_and(|seg| seg.ident == "spawn") =>
+                {
+                    true
+                }
+                syn::Expr::MethodCall(call) if call.method == "spawn" => true,
+                _ => false,
+            };
+            if is_spawn {
+                self.has_spawn = true;
+                if let syn::Pat::Ident(pat_ident) = &node.pat {
+                    self.spawned_vars.push(pat_ident.ident.to_string());
+                }
+            }
+        }
+        syn::visit::visit_local(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func
+            && let Some(segment) = expr_path.path.segments.last()
+            && segment.ident == "spawn"
+        {
+            self.has_spawn = true;
+            self.spawn_count += 1;
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name == "join" || name == "await" {
+            self.has_join = true;
+            if let syn::Expr::Path(expr_path) = &*node.receiver
+                && let Some(seg) = expr_path.path.segments.last()
+            {
+                self.joined_vars.push(seg.ident.to_string());
+            } else if let syn::Expr::Call(call) = &*node.receiver {
+                if let syn::Expr::Path(expr_path) = &*call.func
+                    && let Some(seg) = expr_path.path.segments.last()
+                    && seg.ident == "spawn"
+                {
+                    self.inline_join_count += 1;
+                }
+            } else if let syn::Expr::MethodCall(mcall) = &*node.receiver
+                && mcall.method == "spawn"
+            {
+                self.inline_join_count += 1;
+            }
+        } else if name == "spawn" {
+            self.has_spawn = true;
+            self.spawn_count += 1;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_await(&mut self, node: &'ast syn::ExprAwait) {
+        self.has_join = true;
+        if let syn::Expr::Path(expr_path) = &*node.base
+            && let Some(seg) = expr_path.path.segments.last()
+        {
+            self.joined_vars.push(seg.ident.to_string());
+        }
+        syn::visit::visit_expr_await(self, node);
+    }
+
+    fn visit_type(&mut self, node: &'ast syn::Type) {
+        if let syn::Type::Path(type_path) = node {
+            if let Some(segment) = type_path.path.segments.first() {
+                let name = segment.ident.to_string();
+                if name.contains("Mutex") {
+                    self.has_mutex = true;
+                }
+                if name.contains("RwLock") {
+                    self.has_rwlock = true;
+                }
+                if name.contains("Atomic") {
+                    self.has_atomic = true;
+                }
+                if name == "Arc" {
+                    self.has_arc = true;
+                }
+            }
+            for segment in &type_path.path.segments {
+                if segment.ident == "mpsc" {
+                    self.has_mpsc = true;
+                }
+            }
+        }
+        syn::visit::visit_type(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        for segment in &node.path.segments {
+            let name = segment.ident.to_string();
+            if name.contains("Mutex") {
+                self.has_mutex = true;
+            }
+            if name.contains("RwLock") {
+                self.has_rwlock = true;
+            }
+            if name.contains("Atomic") {
+                self.has_atomic = true;
+            }
+            if name == "mpsc" {
+                self.has_mpsc = true;
+            }
+            if name == "Arc" {
+                self.has_arc = true;
+            }
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+}
+
+pub fn analyze_thread_activity(source_file: &Path) -> Vec<String> {
+    let mut activities = Vec::new();
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return activities;
+    };
+
+    let Ok(ast) = syn::parse_file(&content) else {
+        return activities;
+    };
+
+    let mut visitor = ThreadActivityVisitor {
+        spawned_vars: Vec::new(),
+        joined_vars: Vec::new(),
+        spawn_count: 0,
+        inline_join_count: 0,
+        has_spawn: false,
+        has_join: false,
+        has_mutex: false,
+        has_rwlock: false,
+        has_atomic: false,
+        has_mpsc: false,
+        has_arc: false,
+    };
+    visitor.visit_file(&ast);
+
+    if visitor.has_spawn {
+        let mut complete = false;
+        if visitor.has_join {
+            if visitor.spawn_count > visitor.inline_join_count + visitor.spawned_vars.len() {
+                complete = false;
+            } else {
+                complete = true;
+                for var in &visitor.spawned_vars {
+                    if !visitor.joined_vars.contains(var) {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if complete {
+            activities
+                .push("Thread/Task Spawning (Lifecycle Complete: join/await found)".to_string());
+        } else {
+            activities.push(
+                "Thread/Task Spawning [WARNING: Lifecycle INCOMPLETE (spawned thread handle not joined)]"
+                    .to_string(),
+            );
+        }
+    }
+    if visitor.has_mutex {
+        activities.push("Mutex synchronization".to_string());
+    }
+    if visitor.has_rwlock {
+        activities.push("RwLock synchronization".to_string());
+    }
+    if visitor.has_atomic {
+        activities.push("Atomic operations".to_string());
+    }
+    if visitor.has_mpsc {
+        activities.push("MPSC Channels".to_string());
+    }
+    if visitor.has_arc {
+        activities.push("Arc reference counting".to_string());
+    }
+
+    activities
+}
+
+struct CachePaddingVisitor {
+    has_padding: bool,
+    has_structs_or_enums: bool,
+}
+
+impl<'ast> Visit<'ast> for CachePaddingVisitor {
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        let tokens = quote::quote!(#node).to_string();
+        if tokens.contains("Atomic")
+            || tokens.contains("Mutex")
+            || tokens.contains("RwLock")
+            || tokens.contains("SpinLock")
+            || tokens.contains("Cache")
+            || tokens.contains("Shared")
+        {
+            self.has_structs_or_enums = true;
+        }
+        syn::visit::visit_item_struct(self, node);
+    }
+
+    fn visit_item_enum(&mut self, node: &'ast syn::ItemEnum) {
+        let tokens = quote::quote!(#node).to_string();
+        if tokens.contains("Atomic")
+            || tokens.contains("Mutex")
+            || tokens.contains("RwLock")
+            || tokens.contains("SpinLock")
+            || tokens.contains("Cache")
+            || tokens.contains("Shared")
+        {
+            self.has_structs_or_enums = true;
+        }
+        syn::visit::visit_item_enum(self, node);
+    }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("repr")
+            && let syn::Meta::List(meta) = &node.meta
+            && meta.tokens.to_string().contains("align")
+        {
+            self.has_padding = true;
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+
+    fn visit_type(&mut self, node: &'ast syn::Type) {
+        if let syn::Type::Path(type_path) = node
+            && let Some(segment) = type_path.path.segments.last()
+        {
+            let name = segment.ident.to_string();
+            if name == "CachePadded" || name == "cache_padded" {
+                self.has_padding = true;
+            }
+        }
+        syn::visit::visit_type(self, node);
+    }
+}
+
+pub fn analyze_cache_padding(source_file: &Path) -> (bool, bool) {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return (false, false);
+    };
+    if let Ok(ast) = syn::parse_file(&content) {
+        let mut visitor = CachePaddingVisitor {
+            has_padding: false,
+            has_structs_or_enums: false,
+        };
+        visitor.visit_file(&ast);
+        return (visitor.has_padding, visitor.has_structs_or_enums);
+    }
+    (false, false)
+}
+
+struct BranchHintVisitor {
+    has_hint: bool,
+    has_control_flow: bool,
+}
+
+impl<'ast> Visit<'ast> for BranchHintVisitor {
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_if(self, node);
+    }
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_match(self, node);
+    }
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_while(self, node);
+    }
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.has_control_flow = true;
+        syn::visit::visit_expr_loop(self, node);
+    }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("cold") {
+            self.has_hint = true;
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func
+            && let Some(segment) = expr_path.path.segments.last()
+        {
+            let name = segment.ident.to_string();
+            if name == "likely" || name == "unlikely" {
+                self.has_hint = true;
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if let Some(segment) = node.path.segments.last() {
+            let name = segment.ident.to_string();
+            if name == "likely" || name == "unlikely" {
+                self.has_hint = true;
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
+}
+
+pub fn analyze_branch_hints(source_file: &Path) -> (bool, bool) {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return (false, false);
+    };
+    if let Ok(ast) = syn::parse_file(&content) {
+        let mut visitor = BranchHintVisitor {
+            has_hint: false,
+            has_control_flow: false,
+        };
+        visitor.visit_file(&ast);
+        return (visitor.has_hint, visitor.has_control_flow);
+    }
+    (false, false)
+}
+
+struct AerospaceVisitor {
+    in_test: bool,
+    has_alloc: bool,
+    has_std: bool,
+    has_unsafe_allow: bool,
+    has_thread_spawn: bool,
+    has_heap_containers: bool,
+    has_compare_exchange: bool,
+    has_load: bool,
+    has_spin_loop: bool,
+    struct_names: Vec<String>,
+    drop_impls: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for AerospaceVisitor {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        let is_test = node.attrs.iter().any(|a| {
+            if let syn::Meta::List(meta) = &a.meta {
+                meta.path.is_ident("cfg") && meta.tokens.to_string().contains("test")
+            } else {
+                false
+            }
+        });
+        let old = self.in_test;
+        if is_test {
+            self.in_test = true;
+        }
+        syn::visit::visit_item_mod(self, node);
+        self.in_test = old;
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let is_test = node.attrs.iter().any(|a| a.path().is_ident("test"));
+        let old = self.in_test;
+        if is_test {
+            self.in_test = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+        self.in_test = old;
+    }
+
+    fn visit_item_extern_crate(&mut self, node: &'ast syn::ItemExternCrate) {
+        if !self.in_test {
+            if node.ident == "alloc" {
+                self.has_alloc = true;
+            }
+            if node.ident == "std" {
+                self.has_std = true;
+            }
+        }
+        syn::visit::visit_item_extern_crate(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        if !self.in_test {
+            match &node.tree {
+                syn::UseTree::Path(path) if path.ident == "std" => self.has_std = true,
+                syn::UseTree::Path(path) if path.ident == "alloc" => self.has_alloc = true,
+                _ => {}
+            }
+        }
+        syn::visit::visit_item_use(self, node);
+    }
+
+    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+        if node.path().is_ident("allow")
+            && let syn::Meta::List(meta) = &node.meta
+            && meta.tokens.to_string().contains("unsafe_op_in_unsafe_fn")
+        {
+            self.has_unsafe_allow = true;
+        }
+        syn::visit::visit_attribute(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(expr_path) = &*node.func
+            && let Some(segment) = expr_path.path.segments.last()
+        {
+            match segment.ident.to_string().as_str() {
+                "spawn" => {
+                    if !self.in_test {
+                        self.has_thread_spawn = true;
+                    }
+                }
+                "new"
+                    if !self.in_test
+                        && expr_path
+                            .path
+                            .segments
+                            .iter()
+                            .any(|s| s.ident == "Box" || s.ident == "HashMap") =>
+                {
+                    self.has_heap_containers = true;
+                }
+                "with_capacity"
+                    if !self.in_test
+                        && expr_path.path.segments.iter().any(|s| s.ident == "Vec") =>
+                {
+                    self.has_heap_containers = true;
+                }
+                _ => {}
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name.contains("compare_exchange") {
+            self.has_compare_exchange = true;
+        }
+        if name == "load" {
+            self.has_load = true;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        for segment in &node.path.segments {
+            if segment.ident == "spin_loop" {
+                self.has_spin_loop = true;
+            }
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        let name = node.ident.to_string();
+        if name.contains("Guard") || name.contains("StateNode") || name.contains("ThreadState") {
+            self.struct_names.push(name);
+        }
+        syn::visit::visit_item_struct(self, node);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        if let Some((path, _)) = &node.trait_
+            && path.is_ident("Drop")
+            && let syn::Type::Path(type_path) = &*node.self_ty
+            && let Some(segment) = type_path.path.segments.last()
+        {
+            self.drop_impls.push(segment.ident.to_string());
+        }
+        syn::visit::visit_item_impl(self, node);
+    }
+}
+
+pub fn analyze_aerospace_grade(source_file: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let Ok(content) = fs::read_to_string(source_file) else {
+        violations.push(format!(
+            "Failed to read source file: {}",
+            source_file.display()
+        ));
+        return violations;
+    };
+
+    let Ok(ast) = syn::parse_file(&content) else {
+        violations.push(
+            "Failed to parse file into AST. Strict aerospace grade requires valid Rust syntax."
+                .to_string(),
+        );
+        return violations;
+    };
+
+    let mut visitor = AerospaceVisitor {
+        in_test: false,
+        has_alloc: false,
+        has_std: false,
+        has_unsafe_allow: false,
+        has_thread_spawn: false,
+        has_heap_containers: false,
+        has_compare_exchange: false,
+        has_load: false,
+        has_spin_loop: false,
+        struct_names: Vec::new(),
+        drop_impls: Vec::new(),
+    };
+    visitor.visit_file(&ast);
+
+    if visitor.has_alloc {
+        violations.push(
+            "Dynamic memory allocation (`alloc`) is strictly prohibited in aerospace grade."
+                .to_string(),
+        );
+    }
+    if visitor.has_std && !source_file.components().any(|c| c.as_os_str() == "tests") {
+        violations.push(
+            "Standard library (`std`) usage is prohibited. Must be `#![no_std]`.".to_string(),
+        );
+    }
+
+    if !source_file.components().any(|c| c.as_os_str() == "tests") && !check_crate_root_no_std() {
+        violations.push(
+            "Crate root (src/lib.rs or src/main.rs) is missing `#![no_std]`. Aerospace grade requires strict no_std environment."
+                .to_string(),
+        );
+    }
+    if visitor.has_unsafe_allow {
+        violations.push("Suppressing unsafe_op_in_unsafe_fn is prohibited. Must enforce `#![deny(unsafe_op_in_unsafe_fn)]`.".to_string());
+    }
+    if visitor.has_thread_spawn {
+        violations.push("Dynamic thread spawning is prohibited.".to_string());
+    }
+    if visitor.has_heap_containers {
+        violations.push("Heap-allocated containers (`Box`, `Vec`, `HashMap`) are prohibited. Use static fixed-size collections.".to_string());
+    }
+    if visitor.has_compare_exchange && visitor.has_spin_loop && !visitor.has_load {
+        violations.push("Potential Cache Line Bouncing detected! Spinlocks must implement Test-and-Test-and-Set (TTAS) by checking `.load()` before `compare_exchange_weak`.".to_string());
+    }
+
+    for s in &visitor.struct_names {
+        if !visitor.drop_impls.contains(s) {
+            violations.push("Potential Resource Leak: Structs handling state or locks ('Guard', 'StateNode') must explicitly implement `Drop` to ensure deterministic thread resource cleanup.".to_string());
+            break;
+        }
+    }
+
+    violations
+}
+
+pub fn analyze_aerospace_grade_structured(
+    source_file: &Path,
+) -> Vec<crate::assurance::StaticFinding> {
+    let violations = analyze_aerospace_grade(source_file);
+    let mut findings = crate::assurance::structured_findings(violations, Some(source_file));
+    findings.extend(analyze_covopt_bench(source_file));
+    findings.extend(analyze_unsafe_macro_capabilities(source_file));
+    findings
+}
+
+pub fn analyze_unsafe_macro_capabilities(
+    source_file: &Path,
+) -> Vec<crate::assurance::StaticFinding> {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return Vec::new();
+    };
+    let Ok(ast) = syn::parse_file(&content) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for item in ast.items {
+        let (name, line) = match item {
+            syn::Item::Macro(item) => (
+                item.mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|segment| segment.ident.to_string()),
+                item.mac.path.span().start().line,
+            ),
+            syn::Item::Struct(item) => (
+                item.attrs.iter().find_map(|attr| {
+                    if !attr.path().is_ident("covopt_hoist") {
+                        return None;
+                    }
+                    attr.path()
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                }),
+                item.ident.span().start().line,
+            ),
+            _ => (None, 0),
+        };
+        if matches!(
+            name.as_deref(),
+            Some("covopt_qsbr_registry" | "covopt_hoist")
+        ) {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::MemorySafety,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Critical,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line,
+                }),
+                explanation: format!(
+                    "unsafe codegen capability `{}` requires explicit lifetime, sanitizer, Miri, and bounded atomic verification",
+                    name.unwrap_or_default()
+                ),
+                remediation: "run the specialized unsafe evidence plan; ordinary fix --apply is blocked".to_string(),
+            });
+        }
+    }
+    findings
+}
+
+struct BenchDceVisitor {
+    explicit_black_box: bool,
+    loop_count: usize,
+}
+
+impl<'ast> Visit<'ast> for BenchDceVisitor {
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*node.func
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "black_box")
+        {
+            self.explicit_black_box = true;
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_while(self, node);
+    }
+
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.loop_count += 1;
+        syn::visit::visit_expr_loop(self, node);
+    }
+}
+
+pub fn analyze_covopt_bench(source_file: &Path) -> Vec<crate::assurance::StaticFinding> {
+    let Ok(content) = fs::read_to_string(source_file) else {
+        return Vec::new();
+    };
+    let Ok(ast) = syn::parse_file(&content) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for item in ast.items {
+        let syn::Item::Fn(item_fn) = item else {
+            continue;
+        };
+        if !item_fn.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "covopt_bench")
+        }) {
+            continue;
+        }
+        let mut visitor = BenchDceVisitor {
+            explicit_black_box: false,
+            loop_count: 0,
+        };
+        visitor.visit_block(&item_fn.block);
+        if !visitor.explicit_black_box {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Medium,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` has incomplete explicit Anti-DCE evidence: {} loop(s) and no user black_box; the marker wrapper only protects its returned value",
+                    item_fn.sig.ident,
+                    visitor.loop_count
+                ),
+                remediation: "black_box benchmark inputs and the measured output, then rerun static verification".to_string(),
+            });
+        }
+        if item_fn.sig.inputs.is_empty() {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Low,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` has no explicit input parameter; input construction and loop-variable use require review",
+                    item_fn.sig.ident
+                ),
+                remediation: "make benchmark input construction explicit or document the generated input domain".to_string(),
+            });
+        }
+        if matches!(item_fn.sig.output, syn::ReturnType::Default) {
+            findings.push(crate::assurance::StaticFinding {
+                kind: crate::assurance::ObligationKind::CpuOverhead,
+                status: crate::assurance::ObligationStatus::Unknown,
+                severity: crate::assurance::Severity::Medium,
+                source: Some(crate::assurance::SourceLocation {
+                    file: source_file.display().to_string(),
+                    line: item_fn.sig.ident.span().start().line,
+                }),
+                explanation: format!(
+                    "benchmark `{}` returns unit; black_box on unit does not establish that loop output is observable",
+                    item_fn.sig.ident
+                ),
+                remediation: "return or explicitly black_box the measured output".to_string(),
+            });
+        }
+    }
+    findings
+}
+
+struct WatchdogVisitor {
+    has_watchdog: bool,
+}
+
+impl<'ast> Visit<'ast> for WatchdogVisitor {
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let name = node.method.to_string();
+        if name.contains("timeout") || name.contains("watchdog") {
+            self.has_watchdog = true;
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let name = node.sig.ident.to_string();
+        if name.contains("timeout") || name.contains("watchdog") {
+            self.has_watchdog = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+}
+
+pub fn analyze_watchdog_timeout(source_file: &Path) -> (bool, bool) {
+    let thread_acts = analyze_thread_activity(source_file);
+    if thread_acts.is_empty() {
+        return (false, false);
+    }
+    if let Ok(content) = fs::read_to_string(source_file)
+        && let Ok(ast) = syn::parse_file(&content)
+    {
+        let mut visitor = WatchdogVisitor {
+            has_watchdog: false,
+        };
+        visitor.visit_file(&ast);
+        return (visitor.has_watchdog, true);
+    }
+    (false, false)
+}
+
+struct StressVisitor {
+    has_stress: bool,
+}
+
+impl<'ast> Visit<'ast> for StressVisitor {
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        let name = node.sig.ident.to_string();
+        if name.contains("stress") || name.contains("fuzzy") || name.contains("heavy_contention") {
+            self.has_stress = true;
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+}
+
+pub fn analyze_stress_test(source_file: &Path) -> (bool, bool) {
+    let thread_acts = analyze_thread_activity(source_file);
+    if thread_acts.is_empty() {
+        return (false, false);
+    }
+    if let Ok(content) = fs::read_to_string(source_file)
+        && let Ok(ast) = syn::parse_file(&content)
+    {
+        let mut visitor = StressVisitor { has_stress: false };
+        visitor.visit_file(&ast);
+        return (visitor.has_stress, true);
+    }
+    (false, false)
+}
+
+fn scan_tests_dir_for_feature<F>(dir: &Path, check_fn: &F) -> bool
+where
+    F: Fn(&Path) -> (bool, bool),
+{
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if scan_tests_dir_for_feature(&path, check_fn) {
+                    return true;
+                }
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let (has_feature, _) = check_fn(&path);
+                if has_feature {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn analyze_project_stress_test(target_file: &Path) -> (bool, bool) {
+    let (has_stress, applicable) = analyze_stress_test(target_file);
+    if has_stress || !applicable {
+        return (has_stress, applicable);
+    }
+
+    let tests_dir = Path::new("tests");
+    if tests_dir.exists() && tests_dir.is_dir() {
+        let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_stress_test);
+        if found_in_tests {
+            return (true, true);
+        }
+    }
+    (false, true)
+}
+
+pub fn analyze_project_watchdog_timeout(target_file: &Path) -> (bool, bool) {
+    let (has_wd, applicable) = analyze_watchdog_timeout(target_file);
+    if has_wd || !applicable {
+        return (has_wd, applicable);
+    }
+
+    let tests_dir = Path::new("tests");
+    if tests_dir.exists() && tests_dir.is_dir() {
+        let found_in_tests = scan_tests_dir_for_feature(tests_dir, &analyze_watchdog_timeout);
+        if found_in_tests {
+            return (true, true);
+        }
+    }
+    (false, true)
+}
+
+fn check_crate_root_no_std() -> bool {
+    let roots = ["src/lib.rs", "src/main.rs"];
+    for root in roots {
+        if let Ok(content) = fs::read_to_string(root)
+            && let Ok(ast) = syn::parse_file(&content)
+        {
+            for attr in &ast.attrs {
+                if let syn::AttrStyle::Inner(_) = attr.style
+                    && attr.path().is_ident("no_std")
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+struct ComplexityVisitor {
+    pub score: usize,
+}
+
+impl<'ast> Visit<'ast> for ComplexityVisitor {
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        self.score += 1;
+        syn::visit::visit_expr_if(self, node);
+    }
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.score += node.arms.len();
+        syn::visit::visit_expr_match(self, node);
+    }
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.score += 1;
+        syn::visit::visit_expr_for_loop(self, node);
+    }
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.score += 1;
+        syn::visit::visit_expr_while(self, node);
+    }
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.score += 1;
+        syn::visit::visit_expr_loop(self, node);
+    }
+    fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+        if matches!(node.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) {
+            self.score += 1;
+        }
+        syn::visit::visit_expr_binary(self, node);
+    }
+}
+
+pub fn analyze_complexity(item_fn: &syn::ItemFn) -> usize {
+    let mut visitor = ComplexityVisitor { score: 1 }; // Base complexity is 1
+    visitor.visit_item_fn(item_fn);
+    visitor.score
+}
+
+pub fn analyze_parameters(item_fn: &syn::ItemFn) -> usize {
+    item_fn.sig.inputs.len()
+}
+
+pub fn parse_covopt_attr_tokens(
+    token_str: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let fields = parse_attribute_fields(token_str);
+    (
+        fields
+            .get("expected")
+            .map(|value| clean_expected_str(value)),
+        fields
+            .get("n_values")
+            .map(|value| clean_n_values_str(value)),
+        fields
+            .get("target_fn")
+            .map(|value| clean_generic_str(value)),
+    )
+}
+
+fn parse_attribute_fields(token_str: &str) -> std::collections::BTreeMap<String, String> {
+    let Ok(fields) = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+        .parse_str(token_str)
+    else {
+        return std::collections::BTreeMap::new();
+    };
+    fields
+        .into_iter()
+        .filter_map(|meta| match meta {
+            syn::Meta::NameValue(value) => Some((
+                value.path.get_ident()?.to_string(),
+                value_expr_to_string(&value.value),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn value_expr_to_string(value: &syn::Expr) -> String {
+    if let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(value),
+        ..
+    }) = value
+    {
+        value.value()
+    } else {
+        value.to_token_stream().to_string()
+    }
+}
+
+fn clean_expected_str(val: &str) -> String {
+    val.trim().trim_matches('"').to_string()
+}
+
+fn clean_n_values_str(val: &str) -> String {
+    let trimmed = val
+        .trim()
+        .trim_matches('"')
+        .trim_matches('[')
+        .trim_matches(']');
+    trimmed
+        .split(',')
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn clean_generic_str(val: &str) -> String {
+    val.trim().trim_matches('"').to_string()
+}
+
+fn parse_named_attr_value(token_str: &str, key: &str) -> Option<String> {
+    parse_attribute_fields(token_str)
+        .get(key)
+        .map(|value| clean_generic_str(value))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CovOptTargetMetadata {
+    pub id: String,
+    pub function: String,
+    pub complexity: Option<String>,
+    #[serde(default)]
+    pub criticality: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CovOptEvidenceMetadata {
+    pub target: String,
+    pub n_values: Option<String>,
+    pub seeds: Option<String>,
+    pub function: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SourceMetadataIndex {
+    pub schema_version: u32,
+    pub source_hashes: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub parameters: Vec<ParameterDescriptor>,
+    pub targets: Vec<CovOptTargetMetadata>,
+    pub evidence: Vec<CovOptEvidenceMetadata>,
+}
+
+impl SourceMetadataIndex {
+    pub fn build(root: &Path) -> Self {
+        let mut source_hashes = std::collections::BTreeMap::new();
+        let mut parameters = Vec::new();
+        let mut targets = Vec::new();
+        let mut evidence = Vec::new();
+        for path in source_files(root) {
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            source_hashes.insert(
+                path.display().to_string(),
+                crate::repair::SourceEdit::hash_source(&content),
+            );
+            let Ok(ast) = syn::parse_file(&content) else {
+                continue;
+            };
+            if let Ok(graph) = crate::parameters::ParameterDependencyGraph::from_source(
+                &content,
+                &path.display().to_string(),
+            ) {
+                parameters.extend(
+                    graph
+                        .parameters
+                        .into_values()
+                        .map(|record| record.descriptor),
+                );
+            }
+            for item in ast.items {
+                let syn::Item::Fn(item_fn) = item else {
+                    continue;
+                };
+                for attr in &item_fn.attrs {
+                    let Some(name) = attr
+                        .path()
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                    else {
+                        continue;
+                    };
+                    let syn::Meta::List(list) = &attr.meta else {
+                        continue;
+                    };
+                    let fields = parse_attribute_fields(&list.tokens.to_string());
+                    match name.as_str() {
+                        "target" | "covopt_target" => targets.push(CovOptTargetMetadata {
+                            id: fields
+                                .get("id")
+                                .map(|value| clean_generic_str(value))
+                                .unwrap_or_else(|| item_fn.sig.ident.to_string()),
+                            function: item_fn.sig.ident.to_string(),
+                            complexity: fields
+                                .get("complexity")
+                                .map(|value| clean_generic_str(value)),
+                            criticality: fields
+                                .get("criticality")
+                                .map(|value| clean_generic_str(value)),
+                            scope: fields.get("scope").map(|value| clean_generic_str(value)),
+                            file: path.clone(),
+                            line: item_fn.sig.ident.span().start().line,
+                        }),
+                        "evidence" | "covopt_evidence" => {
+                            if let Some(target) = fields.get("target") {
+                                evidence.push(CovOptEvidenceMetadata {
+                                    target: clean_generic_str(target),
+                                    n_values: fields
+                                        .get("n")
+                                        .or_else(|| fields.get("n_values"))
+                                        .map(|value| clean_generic_str(value)),
+                                    seeds: fields
+                                        .get("seeds")
+                                        .or_else(|| fields.get("seed"))
+                                        .map(|value| clean_generic_str(value)),
+                                    function: item_fn.sig.ident.to_string(),
+                                    file: path.clone(),
+                                    line: item_fn.sig.ident.span().start().line,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        targets.sort_by(|left, right| left.id.cmp(&right.id));
+        parameters.sort_by(|left, right| left.id.cmp(&right.id));
+        parameters.dedup_by(|left, right| left.id == right.id);
+        evidence.sort_by(|left, right| left.file.cmp(&right.file).then(left.line.cmp(&right.line)));
+        Self {
+            schema_version: covopt_schema::SCHEMA_VERSION,
+            source_hashes,
+            parameters,
+            targets,
+            evidence,
+        }
+    }
+
+    pub fn load_or_build(root: &Path) -> Self {
+        let cache = root.join("target/covopt/metadata-index.json");
+        let current_hashes = source_files(root)
+            .into_iter()
+            .filter_map(|path| {
+                fs::read_to_string(&path).ok().map(|content| {
+                    (
+                        path.display().to_string(),
+                        crate::repair::SourceEdit::hash_source(&content),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if let Ok(content) = fs::read_to_string(&cache)
+            && let Ok(index) = serde_json::from_str::<Self>(&content)
+            && index.schema_version == covopt_schema::SCHEMA_VERSION
+            && index.source_hashes == current_hashes
+        {
+            return index;
+        }
+        let index = Self::build(root);
+        if let Some(parent) = cache.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_vec_pretty(&index) {
+            let _ = fs::write(cache, content);
+        }
+        index
+    }
+}
+
+fn source_files(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt" | ".agents"
+            )
+        })
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("rs"))
+        .map(|entry| entry.path().to_path_buf())
+        .collect()
+}
+
+pub fn find_covopt_target_metadata(target_id: &str) -> Option<CovOptTargetMetadata> {
+    if let Some(metadata) = SourceMetadataIndex::load_or_build(Path::new("."))
+        .targets
+        .into_iter()
+        .find(|metadata| metadata.id == target_id)
+    {
+        return Some(metadata);
+    }
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "target" | "covopt_target"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                let id = parse_named_attr_value(&tokens, "id")
+                    .unwrap_or_else(|| item_fn.sig.ident.to_string());
+                if id != target_id {
+                    continue;
+                }
+                return Some(CovOptTargetMetadata {
+                    id,
+                    function: item_fn.sig.ident.to_string(),
+                    complexity: parse_named_attr_value(&tokens, "complexity"),
+                    criticality: parse_named_attr_value(&tokens, "criticality"),
+                    scope: parse_named_attr_value(&tokens, "scope"),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    None
+}
+
+pub fn find_all_covopt_target_metadata() -> Vec<CovOptTargetMetadata> {
+    let mut indexed = SourceMetadataIndex::load_or_build(Path::new(".")).targets;
+    indexed.dedup_by(|left, right| left.id == right.id);
+    if !indexed.is_empty() {
+        return indexed;
+    }
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    let mut results = Vec::new();
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "target" | "covopt_target"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                results.push(CovOptTargetMetadata {
+                    id: parse_named_attr_value(&tokens, "id")
+                        .unwrap_or_else(|| item_fn.sig.ident.to_string()),
+                    function: item_fn.sig.ident.to_string(),
+                    complexity: parse_named_attr_value(&tokens, "complexity"),
+                    criticality: parse_named_attr_value(&tokens, "criticality"),
+                    scope: parse_named_attr_value(&tokens, "scope"),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    results.sort_by(|left, right| left.id.cmp(&right.id));
+    results.dedup_by(|left, right| left.id == right.id);
+    results
+}
+
+pub fn find_covopt_evidence_metadata(target_id: &str) -> Vec<CovOptEvidenceMetadata> {
+    let indexed = SourceMetadataIndex::load_or_build(Path::new("."))
+        .evidence
+        .into_iter()
+        .filter(|metadata| metadata.target == target_id)
+        .collect::<Vec<_>>();
+    if !indexed.is_empty() {
+        return indexed;
+    }
+    let mut results = Vec::new();
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .filter_map(|entry| entry.ok());
+    for entry in walker {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(ast) = syn::parse_file(&content) else {
+            continue;
+        };
+        for item in ast.items {
+            let syn::Item::Fn(item_fn) = item else {
+                continue;
+            };
+            for attr in &item_fn.attrs {
+                if attr.path().segments.last().is_none_or(|segment| {
+                    !matches!(
+                        segment.ident.to_string().as_str(),
+                        "evidence" | "covopt_evidence"
+                    )
+                }) {
+                    continue;
+                }
+                let syn::Meta::List(list) = &attr.meta else {
+                    continue;
+                };
+                let tokens = list.tokens.to_string();
+                let Some(target) = parse_named_attr_value(&tokens, "target") else {
+                    continue;
+                };
+                if target != target_id {
+                    continue;
+                }
+                results.push(CovOptEvidenceMetadata {
+                    target,
+                    n_values: parse_named_attr_value(&tokens, "n"),
+                    seeds: parse_named_attr_value(&tokens, "seeds"),
+                    function: item_fn.sig.ident.to_string(),
+                    file: entry.path().to_path_buf(),
+                    line: item_fn.sig.ident.span().start().line,
+                });
+            }
+        }
+    }
+    results.sort_by(|left, right| left.file.cmp(&right.file).then(left.line.cmp(&right.line)));
+    results
+}
+
+pub fn find_covopt_test_metadata(
+    test_name: &str,
+) -> Option<(String, String, Option<String>, PathBuf)> {
+    let walker = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            name != "target" && name != ".git" && name != ".covopt"
+        })
+        .filter_map(|e| e.ok());
+
+    for entry in walker {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+            && let Ok(content) = fs::read_to_string(entry.path())
+            && let Ok(ast) = syn::parse_file(&content)
+        {
+            for item in ast.items {
+                if let syn::Item::Fn(item_fn) = item
+                    && item_fn.sig.ident == test_name
+                {
+                    for attr in &item_fn.attrs {
+                        let path_str = attr
+                            .path()
+                            .segments
+                            .iter()
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        if (path_str == "covopt::test"
+                            || path_str == "test"
+                            || path_str == "covopt_macro::test"
+                            || path_str == "covopt_macro::covopt_test"
+                            || path_str == "covopt_test")
+                            && let syn::Meta::List(list) = &attr.meta
+                        {
+                            let token_str = list.tokens.to_string();
+                            let (expected, n_values, target_fn) =
+                                parse_covopt_attr_tokens(&token_str);
+                            if expected.is_some() || n_values.is_some() || target_fn.is_some() {
+                                let exp = expected.unwrap_or_else(|| {
+                                    covopt_macro::covopt_param!(
+                                        "COVOPT_DEFAULT_EXPECTED",
+                                        "O(1)".to_string()
+                                    )
+                                });
+                                let n_val = n_values.unwrap_or_else(|| {
+                                    covopt_macro::covopt_param!(
+                                        "COVOPT_DEFAULT_N_VALUES",
+                                        "1,100,1000".to_string()
+                                    )
+                                });
+                                return Some((exp, n_val, target_fn, entry.path().to_path_buf()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn find_package_for_file(path: &Path) -> Option<String> {
+    let absolute_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut current_dir = absolute_path.parent();
+    while let Some(dir) = current_dir {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists()
+            && let Ok(content) = fs::read_to_string(&cargo_toml)
+        {
+            if let Ok(value) = content.parse::<toml::Value>()
+                && let Some(name) = value
+                    .get("package")
+                    .and_then(|package| package.get("name"))
+                    .and_then(|name| name.as_str())
+            {
+                return Some(name.to_string());
+            }
+
+            // Keep package discovery working with Cargo manifests that
+            // use syntax newer than the embedded TOML parser understands.
+            let mut in_package = false;
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_package = line == "[package]";
+                } else if in_package
+                    && let Some(value) = line.strip_prefix("name")
+                    && let Some(value) = value.trim_start().strip_prefix('=')
+                {
+                    let name = value.trim().trim_matches('"').trim_matches('\'');
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        current_dir = dir.parent();
+    }
+    None
+}
+
+pub fn resolve_package_for_target(
+    test_name: &str,
+    configured_package: Option<&String>,
+) -> Option<String> {
+    if let Some(pkg) = configured_package {
+        return Some(pkg.clone());
+    }
+    if let Some((_, _, _, path)) = find_covopt_test_metadata(test_name)
+        && let Some(pkg) = find_package_for_file(&path)
+    {
+        return Some(pkg);
+    }
+    if let Some(metadata) = find_covopt_target_metadata(test_name)
+        && let Some(pkg) = find_package_for_file(&metadata.file)
+    {
+        return Some(pkg);
+    }
+
+    // Metadata can be unavailable when a fixture uses a macro form that is not
+    // parseable in the current toolchain. The conventional integration-test
+    // filename is still a safe package hint; fall back to it before compiling
+    // the entire workspace.
+    let mut candidates = vec![
+        PathBuf::from("tests").join(format!("{test_name}.rs")),
+        PathBuf::from("CovOpt-Analyzer/tests").join(format!("{test_name}.rs")),
+    ];
+    if let Ok(entries) = walkdir::WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "target" | ".git" | ".covopt"
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        candidates.extend(entries.into_iter().filter_map(|entry| {
+            let path = entry.into_path();
+            (path.extension().and_then(|value| value.to_str()) == Some("rs")
+                && path.file_stem().and_then(|value| value.to_str()) == Some(test_name))
+            .then_some(path)
+        }));
+    }
+    candidates.sort();
+    candidates.dedup();
+    for path in candidates {
+        if path.is_file()
+            && let Some(pkg) = find_package_for_file(&path)
+        {
+            return Some(pkg);
+        }
+    }
+    None
+}
+
+pub fn find_all_covopt_tests() -> Vec<(String, String, String)> {
+    use walkdir::WalkDir;
+    let mut results = Vec::new();
+
+    let walker = WalkDir::new(".")
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            name != "target" && name != ".git" && name != ".covopt"
+        })
+        .filter_map(|e| e.ok());
+
+    for entry in walker {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+            && let Ok(file_content) = std::fs::read_to_string(entry.path())
+            && (file_content.contains("#[covopt::test")
+                || file_content.contains("#[covopt_test")
+                || file_content.contains("#[covopt_macro::covopt_test"))
+            && let Ok(ast) = syn::parse_file(&file_content)
+        {
+            for item in ast.items {
+                if let syn::Item::Fn(item_fn) = item {
+                    let covopt_attr = item_fn.attrs.iter().find(|attr| {
+                        let path_str = attr
+                            .path()
+                            .segments
+                            .iter()
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        path_str == "covopt::test"
+                            || path_str == "covopt_test"
+                            || path_str == "covopt_macro::covopt_test"
+                            || path_str == "covopt_macro::test"
+                    });
+
+                    if let Some(attr) = covopt_attr {
+                        let mut expected = covopt_macro::covopt_param!(
+                            "COVOPT_DEFAULT_EXPECTED",
+                            "O(1)".to_string()
+                        );
+                        let mut n_values = covopt_macro::covopt_param!(
+                            "COVOPT_DEFAULT_N_VALUES",
+                            "1,100,1000".to_string()
+                        );
+
+                        if let syn::Meta::List(meta) = &attr.meta {
+                            let tokens = meta.tokens.to_string();
+                            let (exp, n_val, _) = parse_covopt_attr_tokens(&tokens);
+                            if let Some(e) = exp {
+                                expected = e;
+                            }
+                            if let Some(n) = n_val {
+                                n_values = n;
+                            }
+                        }
+                        results.push((item_fn.sig.ident.to_string(), expected, n_values));
+                    }
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        let fallback_walker = WalkDir::new(".")
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                name != "target" && name != ".git" && name != ".covopt"
+            })
+            .filter_map(|e| e.ok());
+
+        for entry in fallback_walker {
+            if entry.path().extension().and_then(|s| s.to_str()) == Some("rs")
+                && let Ok(file_content) = std::fs::read_to_string(entry.path())
+                && (file_content.contains("#[test]") || file_content.contains("#[covopt_test]"))
+                && let Ok(ast) = syn::parse_file(&file_content)
+            {
+                for item in ast.items {
+                    if let syn::Item::Fn(item_fn) = item {
+                        let has_test_attr = item_fn.attrs.iter().any(|attr| {
+                            attr.path().is_ident("test")
+                                || attr.path().segments.last().map(|s| s.ident.to_string())
+                                    == Some("test".to_string())
+                        });
+                        if has_test_attr {
+                            results.push((
+                                item_fn.sig.ident.to_string(),
+                                covopt_macro::covopt_param!(
+                                    "COVOPT_FALLBACK_EXPECTED",
+                                    "O(1)".to_string()
+                                ),
+                                covopt_macro::covopt_param!(
+                                    "COVOPT_FALLBACK_N_VALUES",
+                                    "1,100,1000".to_string()
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_package_for_target;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn resolves_workspace_package_for_configured_test() {
+        let package = resolve_package_for_target("binary_search", None);
+        assert_eq!(package.as_deref(), Some("CovOpt-Analyzer"));
+    }
+
+    #[test]
+    fn discovers_target_and_evidence_annotations() {
+        let target = super::find_covopt_target_metadata("binary_search")
+            .expect("binary_search target annotation");
+        assert_eq!(target.function, "compute_binary_search");
+        assert_eq!(target.complexity.as_deref(), Some("O(log N)"));
+        let evidence = super::find_covopt_evidence_metadata("binary_search");
+        assert!(evidence.iter().any(|item| item.function == "binary_search"));
+    }
+
+    #[test]
+    fn metadata_index_is_versioned_and_cacheable() {
+        let index = super::SourceMetadataIndex::load_or_build(Path::new("."));
+        assert_eq!(index.schema_version, covopt_schema::SCHEMA_VERSION);
+        assert!(index.targets.iter().any(|item| item.id == "binary_search"));
+        let cached =
+            fs::read_to_string("target/covopt/metadata-index.json").expect("metadata index cache");
+        let decoded: super::SourceMetadataIndex = serde_json::from_str(&cached).unwrap();
+        assert_eq!(decoded.source_hashes, index.source_hashes);
+    }
+}

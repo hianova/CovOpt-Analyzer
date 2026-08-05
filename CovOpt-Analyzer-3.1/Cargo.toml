@@ -1,0 +1,52 @@
+[package]
+name = "CovOpt-Analyzer"
+version = "3.0.0"
+edition = "2024"
+description = "Evidence-driven Rust analysis, optimization, and transactional convergence"
+license = "MIT"
+repository = "https://github.com/hianova/CovOpt-Analyzer"
+homepage = "https://github.com/hianova/CovOpt-Analyzer"
+documentation = "https://docs.rs/CovOpt-Analyzer"
+readme = "README.md"
+keywords = ["performance", "cli", "static-analysis", "optimization", "testing"]
+categories = ["command-line-utilities", "development-tools::testing"]
+authors = ["hianova <hianova@github.com>"]
+exclude = [
+    ".DS_Store",
+    ".agents/",
+    ".covopt/",
+    ".covopt.toml",
+    ".covopt_backup/",
+    ".gitignore",
+    "scratch/",
+]
+
+[[bin]]
+name = "covopt"
+path = "src/main.rs"
+
+[[bin]]
+name = "cargo-covopt"
+path = "src/bin/cargo_covopt.rs"
+
+[dependencies]
+covopt-macro = { version = "3.0.0", path = "../covopt-macro" }
+covopt-schema = { version = "3.0.0", path = "../covopt-schema" }
+clap = { version = "4.5.31", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+toml = "1.1.2"
+anyhow = "1.0.104"
+syn = { version = "3.0", features = ["full", "extra-traits", "visit", "visit-mut"] }
+tempfile = "3.17.1"
+rustc-demangle = "0.1.24"
+quote = "1.0"
+regex = "1.10.0"
+walkdir = "2.5.0"
+spin = "0.12.2"
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+rand = "0.10.2"
+egg = "0.11.0"
+
+[workspace]
+

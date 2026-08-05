@@ -1,0 +1,20 @@
+[package]
+name = "covopt_contest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+covopt-macro = { path = "../covopt-macro" }
+CovOpt-Analyzer = { path = "../CovOpt-Analyzer" }
+
+[[bin]]
+name = "trial1_rediscovery"
+path = "src/bin/trial1_rediscovery.rs"
+
+[[bin]]
+name = "trial2_chaos_survival"
+path = "src/bin/trial2_chaos_survival.rs"
+
+[[bin]]
+name = "trial3_superoptimization"
+path = "src/bin/trial3_superoptimization.rs"
