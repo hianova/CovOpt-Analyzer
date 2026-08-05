@@ -10,7 +10,12 @@ use std::process::Command;
 pub struct FlashGeneExtractor;
 
 impl FlashGeneExtractor {
-    pub fn build_prompt(chaos_bounds: &str, fuzzer_model: &str) -> String {
+    pub fn build_prompt(chaos_bounds: &str, fuzzer_model: &str, external_genes: &[String]) -> String {
+        let external_str = if external_genes.is_empty() {
+            "".to_string()
+        } else {
+            format!("(External: {})", external_genes.join(", "))
+        };
         format!(
             "You are the Top-Level Architect (CovOpt Flash Engine). \n\
             Analyze the following Chaos Boundaries and Fuzzer Models:\n\
@@ -20,8 +25,9 @@ impl FlashGeneExtractor {
             Select the most appropriate Concurrency and Storage genes from the Gene Pool \n\
             (Concurrency: Mutex, RwLock, LockFreeQueue, ActorModel) \n\
             (Storage: HashMap, BTreeMap, Vec, Slab) \n\
+            {} \n\
             Output ONLY a JSON specifying 2-3 highly probable genes per category.",
-            chaos_bounds, fuzzer_model
+            chaos_bounds, fuzzer_model, external_str
         )
     }
 

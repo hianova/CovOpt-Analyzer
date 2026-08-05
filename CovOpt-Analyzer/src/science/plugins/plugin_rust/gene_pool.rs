@@ -11,6 +11,7 @@ pub enum ConcurrencyGene {
     RwLock,
     LockFreeQueue,
     ActorModel,
+    External(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -19,6 +20,7 @@ pub enum StorageGene {
     BTreeMap,
     Vec,
     Slab,
+    External(String),
 }
 
 pub struct GeneLibrary;
@@ -47,6 +49,16 @@ impl GeneLibrary {
         parse_quote! {
             pub struct #name {
                 queue: crossbeam::queue::SegQueue<#inner_type>,
+            }
+        }
+    }
+
+    /// Returns an AST template for an external plugin wrapper.
+    pub fn get_external_wrapper(name: &syn::Ident, inner_type: &syn::Type, external_path: &str) -> ItemStruct {
+        let external_type: syn::Type = syn::parse_str(external_path).unwrap_or_else(|_| parse_quote!(std::sync::Mutex));
+        parse_quote! {
+            pub struct #name {
+                inner: #external_type<#inner_type>,
             }
         }
     }

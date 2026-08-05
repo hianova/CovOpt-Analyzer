@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 covopt-macro = { path = "../covopt-macro" }
 CovOpt-Analyzer = { path = "../CovOpt-Analyzer" }
+no_std_tool = { path = "../../Universal-Project/core/no_std_tool" }
 
 [[bin]]
 name = "trial1_rediscovery"
@@ -18,3 +19,7 @@ path = "src/bin/trial2_chaos_survival.rs"
 [[bin]]
 name = "trial3_superoptimization"
 path = "src/bin/trial3_superoptimization.rs"
+
+[[bin]]
+name = "trial5_qsbr"
+path = "src/bin/trial5_qsbr.rs"

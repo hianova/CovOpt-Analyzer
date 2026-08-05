@@ -4688,7 +4688,7 @@ pub fn run_evolve(args: &crate::EvolveArgs) {
 
     println!("🧠 [Phase 1 & 2] Flash LLM Architect analyzing Chaos Bounds...");
     let (concurrency_genes, storage_genes) = FlashGeneExtractor::parse_llm_priors(
-        &FlashGeneExtractor::build_prompt(chaos_bounds, fuzzer_model)
+        &FlashGeneExtractor::build_prompt(chaos_bounds, fuzzer_model, &[])
     );
     
     println!("🧬 [Phase 2] Punnett Square Matrix forming combinations...");

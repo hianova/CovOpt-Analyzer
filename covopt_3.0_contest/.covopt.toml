@@ -1,0 +1,7 @@
+[plugins]
+[[plugins.external]]
+crate_name = "no_std_tool"
+genes = [
+    "no_std_tool::qsbr::QsbrCell",
+    "no_std_tool::qsbr::SharedSlab"
+]
