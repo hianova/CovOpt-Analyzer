@@ -1,126 +1,38 @@
-# CovOpt 3.0 architecture
+# Architecture of CovOpt-Analyzer 3.1
 
-## Design objective
+CovOpt 3.1 is built around the **Ramanujan Pipeline**, an automated software engineering (ASE) engine that designs, relaxes, anneals, and fuzzes Rust source code automatically.
 
-CovOpt turns a developer goal into a reproducible decision, not an opaque code
-rewrite. Every automatic change must connect four things:
+## The Ramanujan Pipeline (4 Phases)
 
-1. an objective or required constraint;
-2. a deterministic candidate materializer;
-3. evidence executed against that exact candidate;
-4. a recoverable workspace transaction.
+CovOpt applies a strict 4-phase pipeline to evolve code:
 
-When one link is missing, the result stays at the proof frontier as
-`unresolved` or `suggestion_only`.
+### Phase 1: Target Scanning & AST Expansion
+- The `#[covopt_evolve]` macro marks a struct or function as an evolutionary target.
+- CovOpt scans for metadata boundaries (e.g. `bounds = "latency < 10us"`, `fuzzer = "zipfian_traffic"`).
+- The existing structure is dissolved, preparing it to be replaced by a synthesized AST.
 
-## Crate boundaries
+### Phase 2: Punnett Square Combinator
+- **Flash LLM Architect**: CovOpt prompts a lightweight LLM with the fuzzer models and constraints. The LLM acts purely as an architectural prior, returning JSON that selects candidate components (e.g. `RwLock`, `LockFreeQueue`, `HashMap`).
+- **Orthogonal Combination**: The `PunnettSquareMatrix` creates all combinations of these genes.
+- **AST Glue Relaxation**: For each combination, CovOpt attempts to compile the code. If it fails due to glue-code errors (e.g., missing `.clone()`, `Box`, or `Into`), the system applies heuristic mutations and recompiles up to 100 generations in milliseconds.
 
-| Crate | Boundary |
-| --- | --- |
-| `covopt-schema` | Stable identifiers and serializable target, evidence, atomic, and parameter metadata |
-| `covopt-macro` | Transparent source annotations and explicit test/search adapters |
-| `CovOpt-Analyzer` | Discovery, planning, evidence execution, optimization, convergence, transactions, and reports |
+### Phase 3: The Crucible (SMT + Annealing)
+- **Z3 SMT Solver**: Magic numbers and constants (like `0x5f3759df` in FastInvSqrt) or optimal thread configurations are mapped to variables. CovOpt uses Z3 to formally verify error bounds and deduce exact constants.
+- **Monte Carlo Annealing**: For non-linear hardware topologies (like CPU cache limits leading to false sharing), CovOpt treats variables like `chunk_size` and `thread_pool_size` as hyperparameters, annealing them to find the "sweet spot" that minimizes Cache Thrashing.
 
-The package versions are synchronized at 3.0.0 for release management. The
-serialized metadata protocol has its own integer `SCHEMA_VERSION`; package and
-wire versions must not be conflated.
+### Phase 4: Double Chaos Sandbox
+- Evolved candidates are tossed into a rigorous, isolated sandbox.
+- **Fuzzer Engine**: Bombards the candidate with highly contentious, concurrent load (e.g., readers/writers fighting for locks).
+- **Time Localizer**: If a structure (e.g., a poorly tuned `rayon` pool) causes a deadlock or a thread freeze, the sandbox hits a strict time limit and massacres the candidate.
+- Only the AST configuration that meets all constraints signs the **Survival Contract**, output to `decision-bundle.json`.
 
-## Convergence state machine
+## Ecosystem Injection (Plugin Registry)
 
-```text
-Discover
-  -> Compile Goal
-  -> Plan Evidence
-  -> Execute / Generate
-  -> Verify exact candidate
-  -> Replan (when rejected or more work remains)
-  -> Apply transaction
-  -> Post-Verify
-  -> Complete
+Introduced in 3.1, CovOpt is not limited to the standard library. By declaring a `.covopt.toml`:
+```toml
+[plugins]
+[[plugins.external]]
+crate_name = "no_std_tool"
+genes = ["no_std_tool::qsbr::QsbrCell"]
 ```
-
-`GoalSpec` is open at extension points: objective, metric, constraint, and
-evaluator IDs are strings with flattened extension maps. Extensibility does not
-mean optimistic fallback. An unknown evaluator without an executable
-candidate-bound contract remains unresolved.
-
-Authority is orthogonal to risk:
-
-| Authority | Analysis/evidence | Workspace write |
-| --- | --- | --- |
-| `read-only` | Yes | Never |
-| `suggest` | Yes | Never |
-| `apply` | Yes | After verification |
-
-Semantic/API/ABI risk routes candidates to stronger evidence. It does not
-disable a candidate merely because its label is medium or high. A high-risk
-candidate is withheld only when the specialized evaluator, correctness
-contract, materializer, reproducibility boundary, or budget is unavailable.
-
-## Evidence model
-
-Evidence has explicit strength and scope. The core statuses are `Proven`,
-`Modeled`, `Observed`, `Assumed`, `Unknown`, and `Failed`; providers have a
-soundness ceiling, so compiler success or a bounded model cannot become an
-unbounded proof.
-
-| Provider | Establishes | Does not establish |
-| --- | --- | --- |
-| Static AST | Structure and modeled findings | Runtime behavior or UB absence |
-| Compiler | Candidate compiles | Semantic equivalence |
-| Test | Observed configured behavior | Exhaustive behavior |
-| LLVM-MCA | Modeled instruction-level deltas | Cache misses or wall-clock latency |
-| Coverage | Executed source regions | CPU overhead or correctness of unexecuted paths |
-| Sanitizer | Observed failures in one run/configuration | Global UB freedom |
-| Atomic model | Bounded contract result | Unbounded concurrency proof |
-| Temporal/relational | Bounded trace property | Behavior outside the declared bound |
-| Adversarial search | Seeded environment exploration | Exhaustive environment coverage |
-
-Candidate MCA evidence compares baseline and patched functions. Availability
-alone is insufficient: the candidate must improve at least one modeled metric
-without regressing the guarded metrics.
-
-## Candidate and transaction boundary
-
-Each `SourceEdit` contains its original text and source hash. Verification:
-
-1. copies the workspace without `.git` or build artifacts;
-2. rejects edits escaping the workspace;
-3. applies edits with hash and overlap checks;
-4. parses changed Rust and parameter metadata;
-5. runs compiler plus planned providers;
-6. binds results to a candidate hash.
-
-Apply then creates `target/covopt/transactions/<candidate>/`, stores complete
-original files, and atomically replaces workspace files. Post-apply checks run
-against the new workspace. Rollback refuses to overwrite files changed after
-the transaction.
-
-No convergence authority includes git commit/push, package publishing, network
-deployment, or other external side effects.
-
-## Optimizers
-
-- **Inputs/seed selection**: deterministic budgeted selection.
-- **Parameters**: one seeded annealed Monte Carlo kernel for all numeric
-  classes; tags express domain and risk rather than selecting algorithms.
-- **Atomic ordering**: legal ordering search gated by an explicit bounded
-  correctness contract.
-- **Code generation**: source/Cargo candidates, compiler fingerprints, and
-  baseline/candidate assembly evidence.
-- **Memory layout**: deterministic field/alignment materializers; public ABI or
-  packed layouts require the missing specialized contract rather than a manual
-  risk override.
-- **Adversarial environments**: seeded, bounded runtime schedules and inputs.
-
-## Artifacts
-
-| Path | Purpose |
-| --- | --- |
-| `target/covopt/decision-bundle.json` | Goal, phases, candidates, evidence, transactions, replay, unresolved frontier |
-| `target/covopt/transactions/*/manifest.json` | Source hashes, backups, and transaction state |
-| `target/covopt/assurance-snapshot.json` | Versioned assurance state and proof frontier |
-| `target/covopt/findings.json` | Shared structured findings |
-
-See [GoalSpec](docs/GOALSPEC.md) and
-[DecisionBundle](docs/DECISION_BUNDLE.md) for the serialized contracts.
+CovOpt's `PluginRegistry` dynamically ingests these custom structures as `External(String)` variants into the `GenePool`. The Flash LLM is made aware of these external crates, allowing CovOpt to construct architectures using advanced ecosystem components like `Tokio`, `Rayon`, or `QSBR`.

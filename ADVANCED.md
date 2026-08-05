@@ -1,186 +1,35 @@
-# Advanced CovOpt 3.0 workflows
+# Advanced Workflows (CovOpt 3.1)
 
-## One-call agent workflow
+This document covers advanced usages of CovOpt, focusing on The Crucible (Z3 + Annealing) and how to configure custom fuzzers and bounds.
 
-Agents should normally invoke one command and consume one artifact:
+## The Crucible: Parameter Fitting & Optimization
 
-```bash
-covopt converge --format json
-jq '{status, selected, unresolved, phases}' target/covopt/decision-bundle.json
-```
+CovOpt relies on **The Crucible** to resolve hyperparameters and magic numbers. It combines formal methods with empirical trials.
 
-Use `--authority suggest` for a verified patch plan without workspace writes,
-or `--authority read-only` when even selecting an apply set is undesirable.
-`apply` is the default and is limited to recoverable workspace transactions.
+### Magic Numbers (Z3 SMT Solver)
+When CovOpt relaxes an AST to uncover unknown constants (e.g., bit shifts `(x >> C1) & C2`, or the famous Quake `0x5f3759df` FastInvSqrt magic number), it does not randomly guess. Instead:
+1. CovOpt translates the Rust AST and its mathematical bounds into SAT/CNF (Conjunctive Normal Form).
+2. The Z3 Theorem Prover receives an Oracle (e.g., standard `f32::sqrt`) and an error margin (`< 1%`).
+3. Z3 solves for the exact coefficients that satisfy the error margin, allowing CovOpt to "rediscover" highly optimized mathematical approximations instantly.
 
-Lower-level commands remain useful for diagnosis:
+### Thread/Hardware Topologies (Monte Carlo Annealing)
+External ecosystems (e.g., `rayon`, `tokio`) often introduce thread pools where performance degrades at high counts due to Cache Thrashing or False Sharing.
+- CovOpt treats variables like `chunk_size` or `thread_pool_size` as evolutionary parameters.
+- It deploys Monte Carlo Annealing within the Double Chaos Sandbox.
+- Under heavy load (like `zipfian_traffic`), it constantly perturbs these parameters, rapidly descending toward the global optimum for the specific CPU cache topology, bypassing the typical developer guesswork.
 
-```bash
-covopt inspect --format json
-covopt check --mode strict --format json
-covopt optimize codegen --target process
-covopt fix --plan --json
-covopt verify safety --target process --sanitizer address
-```
+## Custom Fuzzers and Strict Bounds
 
-## Project-owned GoalSpec
-
-Persist defaults in `.covopt.toml`:
-
-```toml
-[converge]
-authority = "apply"
-
-[converge.target]
-selector = "auto"
-
-[converge.budget]
-wall_time_ms = 30000
-max_iterations = 8
-
-[[converge.objectives]]
-id = "codegen-overhead"
-direction = "minimize"
-
-[converge.objectives.metric]
-id = "codegen-overhead"
-```
-
-An external JSON/TOML GoalSpec passed with `--spec` takes precedence; target,
-objective, constraint, budget, and authority CLI options override the loaded
-document. Unknown custom fields are preserved in extension maps. Unknown
-evaluator IDs do not pass unless they name a supported candidate-bound provider
-contract. See [the complete reference](docs/GOALSPEC.md).
-
-## Decision and recovery
-
-Every completed run writes `target/covopt/decision-bundle.json`, including the
-compiled evaluator contracts, required providers, exact verification records,
-committed or rolled-back transactions, replay command, and unresolved frontier.
-
-Inspect and recover a committed transaction:
-
-```bash
-jq '.transactions[] | {status, manifest_path, files}' \
-  target/covopt/decision-bundle.json
-
-covopt fix --rollback \
-  target/covopt/transactions/<candidate>/manifest.json --json
-```
-
-Rollback succeeds only if current files still match the transaction's
-post-apply hashes. This protects developer edits made after convergence.
-
-## Parameter optimization
-
-Declare a default plus an explicit domain:
+The `#[covopt_evolve]` macro dictates the life-and-death criteria in the Double Chaos Sandbox.
 
 ```rust
-use covopt_macro::covopt_param;
-
-const QUEUE_CAPACITY: usize = covopt_param!(
-    "queue.capacity",
-    256usize,
-    range = 16..=4096,
-    class = "capacity",
-    evaluation = "compile_time",
-    scale = "pow2",
-    unit = "items",
-    risk = ["memory", "latency"]
-);
+#[covopt_evolve(bounds = "latency < 10us", fuzzer = "high_contention_no_std")]
+pub struct UltraLowLatencyCache {
+    // ...
+}
 ```
 
-Normal and `no_std` compilation uses `256`. Search and robustness modes are
-explicit; confirmation requires a candidate hash, preventing an accidental
-environment variable from changing production defaults.
+- **Bounds**: The execution constraint. CovOpt measures empirical runs against this bound. If the evolved AST violates it, the Sandbox's Time Localizer immediately kills the thread, failing the generation.
+- **Fuzzer**: Specifies the workload simulator (e.g., `zipfian_traffic`, `high_contention_no_std`). The Fuzzer Engine stresses the generated structure to uncover race conditions, thread starvation, or deadlocks.
 
-```bash
-covopt optimize parameters \
-  --target queue_bench \
-  --iterations 20 \
-  --top-k 5 \
-  --seed 7 \
-  --json
-```
-
-All numeric classes use the same seeded annealed Monte Carlo engine. Class,
-scale, unit, and risk tags constrain or explain the domain; they do not select
-separate search algorithms.
-
-## Target, temporal, and relational contracts
-
-```rust
-use covopt_macro::{covopt_atomic, covopt_evidence, covopt_target};
-
-#[covopt_target(id = "worker", complexity = "O(N)", criticality = "high")]
-fn worker() {}
-
-#[covopt_evidence(target = "worker", seeds = "7,11", threads = [1, 2, 4])]
-fn worker_evidence() {}
-
-#[covopt_atomic(
-    target = "worker",
-    ordering = "acq-rel",
-    liveness = "bounded",
-    bounds = "threads=4,events=32"
-)]
-fn worker_atomic_contract() {}
-```
-
-Target-owned runtime contracts belong in `.covopt.toml`:
-
-```toml
-[target.worker]
-test = "worker_trace"
-
-[[target.worker.temporal]]
-name = "eventually-completes"
-operator = "eventually"
-event = "completed"
-bound = 64
-fairness_assumption = "bounded scheduler fairness"
-timeout_ms = 5000
-
-[[target.worker.relational]]
-name = "preserves-observations"
-base = "tests/traces/worker-baseline.json"
-observations = ["operation", "value"]
-bound = 64
-timeout_ms = 5000
-```
-
-The target test should emit runtime Trace IR through
-`CovOpt_Analyzer::trace::write_trace_to_requested_path`. Missing contracts or
-runtime traces are reported unavailable; static source similarity is never
-reported as observed runtime equivalence.
-
-## CI and machine-readable output
-
-```bash
-covopt check --staged --fast
-covopt check --format json | jq '.targets[] | select(.passed == false)'
-covopt check --format sarif
-```
-
-Diagnostics go to `stderr`; structured output stays on `stdout`. The managed
-pre-commit block installed by `covopt init --hook` runs
-`covopt check --staged --fast` and preserves existing hook content.
-
-For deterministic automation, pin seeds, bounds, target CPU, and toolchain.
-Record unavailable tools as an unresolved environment dependency instead of
-weakening the evaluator contract.
-
-## External tools
-
-| Capability | Tool | Default role |
-| --- | --- | --- |
-| Compilation/tests | Cargo/Rust toolchain | Core |
-| Assembly model | `llvm-mca` | Routed for codegen objectives/risk |
-| Source coverage | `cargo llvm-cov`/LLVM tools | Explicit/fallback evidence |
-| Sanitizers | Rust sanitizer toolchain | Explicit safety evidence |
-| Runtime profiling | configured profiler | Optional diagnosis |
-| Mutation/fuzzing | `cargo-mutants`, `cargo-fuzz` | Optional hardening |
-
-CovOpt does not require flamegraphs or profiles merely to run convergence.
-Memory-layout improvement needs an appropriate layout/workload contract; an
-instruction model cannot invent cache-miss evidence.
+If you are writing high-performance lock-free data structures, these bounds serve as the ultimate defense against regressions.
