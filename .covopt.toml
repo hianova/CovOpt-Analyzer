@@ -1,0 +1,116 @@
+version = 3
+
+[assurance]
+mode = "adaptive"
+overall_coverage = 0.90
+critical_coverage = 1.0
+performance_coverage = 0.90
+budget_seconds = 30
+planner = "hybrid"
+fail_on_critical_unknown = true
+
+[providers]
+static = "required"
+mca = "auto"
+coverage = "fallback"
+sanitizer = "fallback"
+concurrency = "fallback"
+profile = "fallback"
+
+[targets]
+discover = "annotations"
+
+[policy.default]
+overall_coverage = 0.90
+critical_coverage = 1.0
+
+[optimization]
+enabled = ["inputs", "atomic", "codegen", "layout"]
+default_budget_seconds = 30
+apply = "never"
+
+[assurance.tools]
+llvm_mca = true
+llvm_cov = true
+sanitizer = false
+profile = false
+compiler = true
+tests = true
+
+[trials]
+budget_seconds = 30
+seed_count = 3
+max_candidates = 256
+timeout_ms = 5000
+
+[atomic]
+enabled = false
+synthesize = false
+
+[optimization.codegen]
+max_candidates = 32
+
+[optimization.layout]
+max_candidates = 32
+cache_line_bytes = 64
+allow_public_abi_suggestions = false
+
+[[target]]
+test = "ruinsos_scheduler"
+expected = "O(1)"
+n_values = "1,100,1000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "matrix_mult"
+expected = "O(N^2)"
+n_values = "50,100,200"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "merge_sort"
+expected = "O(N log N)"
+n_values = "100,500,1000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "binary_search"
+expected = "O(log N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "dummy_algorithm"
+expected = "O(N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
+
+[[target]]
+test = "linear_scan"
+expected = "O(N)"
+n_values = "1000,5000,10000"
+require_cache_padding = true
+require_branch_hints = true
+require_aerospace_grade = false
+require_watchdog_timeout = true
+require_stress_test = true
